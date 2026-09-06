@@ -29,10 +29,10 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/HiddenProto/LimbReani
 change under you. A new one is published with every update:
 
 ```lua
-loadstring(game:HttpGet("https://raw.githubusercontent.com/HiddenProto/LimbReanimate/v1.0.0/src/LimbReanimate.lua"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/HiddenProto/LimbReanimate/v1.0.1/src/LimbReanimate.lua"))()
 ```
 
-Current release: **v1.0.0**
+Current release: **v1.0.1**
 
 ---
 
@@ -51,7 +51,7 @@ Same options as Uhhhhhh's Limbs page.
 | Show me how I look! | Throttles joint writes to 10/s, so you see roughly what other players receive. |
 | Target Fling Enabled | Lets `Fling()` queue targets. Touching a player takes network ownership of them. |
 | Use NaN State Fling | Uses a NaN `MoveDirectionInternal` instead of a huge velocity to do the flinging. |
-| Root Jitter | Nudges the root 0.005 studs on Z every frame so identical CFrames aren't dropped before replicating. Off = steadier torso. |
+| Root Jitter | Nudges the root 0.005 studs on Z every frame so identical CFrames aren't dropped before replicating. **Default off** — it visibly shakes the torso. Turn it on only if a game is dropping your root writes. |
 
 **Settings apply on the next reanimate**, not the current one.
 

@@ -135,11 +135,12 @@ the draw — so the pose you are looking at is the pose that was sent.
 
 ## The smaller mechanisms
 
-**Root jitter.** Each root write adds `math.random(0,1) * 0.005` on Z. The
-replicator can drop a CFrame identical to the last one as "no change", and the
-nudge guarantees it is never identical. The cost is that the torso — and
-everything Motor6D-jointed to it — shakes slightly every frame. It is a toggle
-here for that reason; the original hardcodes it on.
+**Root jitter.** Uhhhhhh adds `math.random(0,1) * 0.005` on Z to every root
+write. The replicator can drop a CFrame identical to the last one as "no
+change", and the nudge guarantees it never is. The cost is that the torso — and
+everything Motor6D-jointed to it — shakes slightly every frame, which is bad
+enough that it is deleted outright in practice. Here it is a toggle, **default
+off**; turn it on only if a game is visibly dropping your root writes.
 
 **`IsGrounded()`.** The root write is skipped when the root part is grounded
 (welded into an anchored assembly), because a grounded part cannot be moved and

@@ -8,7 +8,7 @@
 	Repo: https://github.com/HiddenProto/LimbReanimate
 ]]
 
-local SCRIPT_VERSION = "1.0.0"
+local SCRIPT_VERSION = "1.0.1"
 
 --==============================================================================
 -- 0. SINGLE INSTANCE GUARD
@@ -475,7 +475,11 @@ LR.InitMode = 2
 LR.ReplicateFPS10 = false   -- "Show me how I look!" (throttle joint writes to 10/s)
 LR.FlingEnabled   = false   -- Target Fling Enabled
 LR.UseNaNFling    = false   -- Use NaN State Fling
-LR.RootJitter     = true    -- per-frame 0.005 Z nudge on the root write
+LR.RootJitter     = false   -- per-frame 0.005 Z nudge on the root write.
+                            -- Uhhhhhh hardcodes this ON; the edited build deletes
+                            -- it outright because it visibly shakes the torso.
+                            -- Default off, toggleable for when a game drops
+                            -- identical consecutive CFrames.
 
 LR.FlingTargets = {}
 LR._TempNotFling = {}
