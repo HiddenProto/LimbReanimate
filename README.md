@@ -29,10 +29,10 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/HiddenProto/LimbReani
 change under you. A new one is published with every update:
 
 ```lua
-loadstring(game:HttpGet("https://raw.githubusercontent.com/HiddenProto/LimbReanimate/v1.9.0/src/LimbReanimate.lua"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/HiddenProto/LimbReanimate/v1.10.0/src/LimbReanimate.lua"))()
 ```
 
-Current release: **v1.9.0**
+Current release: **v1.10.0**
 
 ---
 
@@ -48,6 +48,7 @@ Same options as Uhhhhhh's Limbs page.
 | **RootPart Mode** | Where the real root part gets parked. 5 options — see below. |
 | **RootPart Velocity** | What velocity the parked root is given each frame. |
 | **Init Mode** | How the character enters the reanimated state — including **No Kill**, which never kills you. |
+| **Drive Mode** | `Auto`, `Joints only` or `Loose Parts only` — see below. |
 | **Rig Source** | `Built-in` or `Origin Only` — see below. Built-in adapts to your rig type: hardcoded R6 skeleton on R6, auto-built skeleton on R15. |
 | **Animate Fake Rig** | Plays your own character animations on the rig, which your real limbs then copy. On for Built-in; **forced off when Origin Only starts**, since that mode exists to hand the rig to your own script. The Animator is there either way. |
 | Show me how I look! | Throttles joint writes to 10/s, so you see roughly what other players receive. |
@@ -106,7 +107,7 @@ Read `driven` against `your body`:
 |---|---|
 | `driven` matches `your body` | everything your character has is being posed |
 | `0 driven`, healthy `your body` | the joints exist but were never matched — a mapping problem |
-| **`your body : 0 joints`** | **the body is a corpse.** Death destroys Motor6Ds and they never come back. The root is still written, but every limb falls away — the character flashes into view and vanishes. Use `Init Mode → No Kill`, which never kills you |
+| **`your body : 0 joints`** | the body has no joints to drive. Check `body health` — if it is 0 the body is a corpse; if it is full, the game simply hands back a jointless character. Either way `Auto` falls through to **Loose Parts** |
 | `respawns: 0` | the kill never produced a new character at all |
 
 **Root drift** is the distance between where the root was written last frame and
@@ -120,6 +121,23 @@ have no R6 equivalent, so they stay at rest.
 
 **Rig Source** and **Init Mode** apply on the next reanimate. Everything else is
 read every frame and applies live.
+
+### Drive Mode
+
+| Mode | How limbs are driven |
+|---|---|
+| **Joints** | writes `Motor6D.Transform`. The body stays one intact assembly. This is the real reanimate — but it needs the body to *have* joints. |
+| **Loose Parts** | writes each limb's `CFrame` directly. For bodies that come back with **no Motor6Ds at all**. |
+| **Auto** (default) | Joints, falling back to Loose Parts only when nothing matched. |
+
+Some games hand back a live, full-health character with every joint already
+gone. Nothing can drive joints that do not exist — but the parts are still
+yours, and **part CFrames replicate for parts you own**, so writing them
+directly drives your limbs for everyone with no joints required.
+
+Matching is by name and non-recursive, so accessory `Handle`s are left alone —
+they are still welded to their limb and follow it for free. Hide Limbs works in
+this mode too, listing parts instead of joints.
 
 ### Rig Source
 

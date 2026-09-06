@@ -8,7 +8,7 @@
 	Repo: https://github.com/HiddenProto/LimbReanimate
 ]]
 
-local SCRIPT_VERSION = "1.9.0"
+local SCRIPT_VERSION = "1.10.0"
 
 --==============================================================================
 -- 0. SINGLE INSTANCE GUARD
@@ -905,6 +905,24 @@ LR.Status = "IDLE"
 	The root entry is deliberately not listed: hiding it would take the whole
 	body, which is what RootPart Mode already does properly.
 ]]
+--[[
+	Drive mode.
+
+	Joints is the real reanimate: write Motor6D transforms, the assembly stays
+	intact. It needs the body to HAVE joints.
+
+	Loose Parts is for when it does not. Some games hand back a live character
+	with no Motor6Ds at all, and a body whose joints are already broken is just
+	a set of parts you own -- so each real part is written straight to its
+	rig counterpart's CFrame instead. Part CFrames replicate for parts you own,
+	so this drives limbs for everyone, no joints required.
+
+	Auto picks Loose Parts only when nothing was matched, so a normal body is
+	never downgraded.
+]]
+LR.DriveMode = 0
+-- 0 = Auto   1 = Joints only   2 = Loose Parts only
+
 LR.HiddenLimbs = {}
 LR.LimbList = {}
 LR.LimbListVersion = 0
@@ -928,8 +946,9 @@ LR.Diag = {
 	Respawns = 0,
 	-- Where the root is actually being sent. A mode that silently fails to
 	-- apply used to be invisible; now it is not.
-	RootMode = "?",
+	RootMode = "-",
 	RootY = 0,
+	Drive = "-",
 	Drift = 0,
 	MaxDrift = 0,
 }
@@ -1399,14 +1418,12 @@ function LR.Start()
 	end
 
 	if not jointsFound then
-		-- A body with no Motor6Ds is a corpse: death destroys joints and they
-		-- never come back. Driving it writes the root while every limb falls
-		-- away, which looks like the character flashing into view and
-		-- vanishing. Say so plainly instead of pretending it worked.
-		warn("[LimbReanimate] your character has no joints -- it is almost certainly "
-			.. "a corpse, so the kill/respawn did not give you a live body. "
-			.. "Try Init Mode -> 'No Kill (in-place)', which never kills you "
-			.. "and so never breaks your joints.")
+		-- Not necessarily a corpse: some games hand back a live, full-health
+		-- character whose joints are simply gone. Nothing can drive joints that
+		-- do not exist, so Auto falls through to writing part CFrames instead.
+		warn("[LimbReanimate] your character has no Motor6D joints. Falling back "
+			.. "to Loose Parts: each limb is written by CFrame instead of through "
+			.. "a joint. Set Drive Mode manually if you want to force either one.")
 	end
 
 	if not Reanimate.CreateCharacter(InitCFrame) then
@@ -1420,12 +1437,13 @@ function LR.Start()
 		LR.Status = "RIG BUILD FAILED"
 		return
 	end
-	LR.Status = jointsFound and "RUNNING" or "NO JOINTS - BODY IS A CORPSE"
+	LR.Status = jointsFound and "RUNNING" or "RUNNING (no joints, loose parts)"
 
 	----------------------------------------------------------------------------
 	-- Per-frame write.
 	----------------------------------------------------------------------------
 	local lastrep = 0
+	local DriveLoose = false
 	local function UpdateTransforms(RC, RootPart, rootcf, rootvel, flingtarget, flingcf)
 		-- IsGrounded() gates the ROOT write only. A grounded root (welded into
 		-- an anchored assembly) cannot be moved, and writing it just spams the
@@ -1450,6 +1468,34 @@ function LR.Start()
 				RootPart.AssemblyAngularVelocity = Vector3.zero
 				SetHidden(RootPart, "PhysicsRepRootPart", nil)
 			end
+		end
+
+		--[[
+			LOOSE PARTS.
+
+			No joints to drive, so drive the parts. Each real part is written
+			straight to the rig part of the same name. They are already
+			CanCollide = false with their velocities zeroed by the main loop, so
+			nothing fights the write, and part CFrames replicate for parts you
+			own -- which your own character's parts are.
+
+			Matching is by name and non-recursive, so accessory Handles are left
+			alone: they are still welded to their limb and follow it for free.
+		]]
+		if DriveLoose then
+			for _, v in BaseParts do
+				if v ~= RootPart and v.Parent and not v:FindFirstAncestorWhichIsA("Tool") then
+					local target = RC:FindFirstChild(v.Name)
+					if target then
+						if LR.HiddenLimbs[v.Name] then
+							v.CFrame = CFrame.new(HoldPositionFor(v.Name))
+						else
+							v.CFrame = target.CFrame
+						end
+					end
+				end
+			end
+			return
 		end
 
 		-- "Show me how I look!": write the joints at 10 Hz instead of every
@@ -1686,15 +1732,42 @@ function LR.Start()
 						table.insert(sig, m.Part1)
 					end
 				end
-				local sigstr = table.concat(sig, ";")
+				-- Auto only downgrades when nothing matched, so a normal body is
+				-- never dropped to loose parts by accident.
+				if LR.DriveMode == 1 then
+					DriveLoose = false
+				elseif LR.DriveMode == 2 then
+					DriveLoose = true
+				else
+					DriveLoose = mapped == 0
+				end
+				LR.Diag.Drive = DriveLoose and "loose parts" or "joints"
+
+				-- Loose mode keys off the part count, since LimbMapping is empty.
+				local sigstr = DriveLoose
+					and ("L:" .. #BaseParts)
+					or ("J:" .. table.concat(sig, ";"))
 				if sigstr ~= LR._LimbSig then
 					LR._LimbSig = sigstr
 					local list = {}
-					for _, m in LimbMapping do
-						-- The root entry is excluded: hiding it would take the
-						-- whole body, which is RootPart Mode's job.
-						if m.Reference and m.RPart0 ~= "ROOT" then
-							table.insert(list, m.Part1)
+					if DriveLoose then
+						-- Loose mode hides whole PARTS, so list what can
+						-- actually be driven: real parts with a rig twin.
+						for _, v in BaseParts do
+							if v ~= RootPart and v.Parent
+								and not v:FindFirstAncestorWhichIsA("Tool")
+								and RC and RC:FindFirstChild(v.Name)
+							then
+								table.insert(list, v.Name)
+							end
+						end
+					else
+						for _, m in LimbMapping do
+							-- The root entry is excluded: hiding it would take
+							-- the whole body, which is RootPart Mode's job.
+							if m.Reference and m.RPart0 ~= "ROOT" then
+								table.insert(list, m.Part1)
+							end
 						end
 					end
 					table.sort(list)
@@ -2325,6 +2398,15 @@ label(body,
 	"No Kill never kills you at all: it takes animation authority from the body you already have, and Deanimate hands that same body back. It is NOT the permadeath 'no respawn' reanimate.",
 	11, COL.DIM, Enum.TextXAlignment.Center)
 
+dropdown(body, "Drive Mode", {
+	"Auto",
+	"Joints only",
+	"Loose Parts only",
+}, LR.DriveMode + 1, function(i) LR.DriveMode = i - 1 end)
+label(body,
+	"Joints writes Motor6D transforms and keeps the body one assembly. Loose Parts writes each limb's CFrame directly, for bodies that come back with no joints at all. Auto only falls back when nothing matched.",
+	11, COL.DIM, Enum.TextXAlignment.Center)
+
 do
 	local _, _, setAnim = toggle(body, "Animate Fake Rig", Reanimate.AnimateRig,
 		function(v) Reanimate.AnimateRig = v end)
@@ -2479,6 +2561,7 @@ local statusConn = RunService.Heartbeat:Connect(function()
 		diagLabel.Text = table.concat({
 			("your rig    : %s"):format(d.RigType),
 			("rig source  : %s"):format(Reanimate.RigKind or "?"),
+			("drive       : %s"):format(d.Drive),
 			("joints      : %d driven, %d pinned"):format(d.Mapped, d.Unmapped),
 			("your body   : %d joints, %s"):format(d.RealJoints, d.BodyState),
 			("body health : %s   respawns: %d"):format(d.Health, d.Respawns),
