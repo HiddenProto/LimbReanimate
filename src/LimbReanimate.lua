@@ -8,7 +8,7 @@
 	Repo: https://github.com/HiddenProto/LimbReanimate
 ]]
 
-local SCRIPT_VERSION = "1.8.1"
+local SCRIPT_VERSION = "1.8.2"
 
 --==============================================================================
 -- 0. SINGLE INSTANCE GUARD
@@ -921,6 +921,11 @@ LR.Diag = {
 	-- cannot be told apart from "your body has no joints to drive".
 	RealJoints = 0,
 	RigParts = 0,
+	-- Joints are destroyed by death. If the body we are driving is a corpse,
+	-- it has none and never will, and no amount of rig work can fix that.
+	BodyState = "?",
+	Health = "?",
+	Respawns = 0,
 	Drift = 0,
 	MaxDrift = 0,
 }
@@ -1264,6 +1269,7 @@ function LR.Start()
 	end
 
 	local CharConn = Player.CharacterAdded:Connect(function(character)
+		LR.Diag.Respawns += 1
 		AdoptCharacter(character, true)
 	end)
 
@@ -1369,23 +1375,34 @@ function LR.Start()
 		read "0 driven" with a root drift near zero, because the root writes are
 		landing fine and there is simply nothing hanging off it.
 	]]
+	local jointsFound = false
 	do
 		LR.Status = "WAITING FOR JOINTS"
-		local deadline = os.clock() + 5
+		local deadline = os.clock() + 8
 		while os.clock() < deadline and not Reanimate.Stopping do
 			local c = Player.Character
-			local found = false
 			if c then
 				for _, d in c:GetDescendants() do
 					if d:IsA("Motor6D") and d.Part0 and d.Part1 then
-						found = true
+						jointsFound = true
 						break
 					end
 				end
 			end
-			if found then break end
+			if jointsFound then break end
 			task.wait()
 		end
+	end
+
+	if not jointsFound then
+		-- A body with no Motor6Ds is a corpse: death destroys joints and they
+		-- never come back. Driving it writes the root while every limb falls
+		-- away, which looks like the character flashing into view and
+		-- vanishing. Say so plainly instead of pretending it worked.
+		warn("[LimbReanimate] your character has no joints -- it is almost certainly "
+			.. "a corpse, so the kill/respawn did not give you a live body. "
+			.. "Try Init Mode -> 'No Respawn (in-place)', which never kills you "
+			.. "and so never breaks your joints.")
 	end
 
 	if not Reanimate.CreateCharacter(InitCFrame) then
@@ -1399,7 +1416,7 @@ function LR.Start()
 		LR.Status = "RIG BUILD FAILED"
 		return
 	end
-	LR.Status = "RUNNING"
+	LR.Status = jointsFound and "RUNNING" or "NO JOINTS - BODY IS A CORPSE"
 
 	----------------------------------------------------------------------------
 	-- Per-frame write.
@@ -1670,6 +1687,9 @@ function LR.Start()
 					end
 					LR.Diag.RealJoints = real
 					LR.Diag.RigParts = RC and #Reanimate.RigBodyParts or 0
+					LR.Diag.BodyState = Humanoid:GetState().Name
+					LR.Diag.Health = ("%d/%d"):format(
+						math.floor(Humanoid.Health), math.floor(Humanoid.MaxHealth))
 				end
 
 				LR.Diag.Mapped = mapped
@@ -2436,7 +2456,8 @@ local statusConn = RunService.Heartbeat:Connect(function()
 			("your rig    : %s"):format(d.RigType),
 			("rig source  : %s"):format(Reanimate.RigKind or "?"),
 			("joints      : %d driven, %d pinned"):format(d.Mapped, d.Unmapped),
-			("your body   : %d joints"):format(d.RealJoints),
+			("your body   : %d joints, %s"):format(d.RealJoints, d.BodyState),
+			("body health : %s   respawns: %d"):format(d.Health, d.Respawns),
 			("rig parts   : %d"):format(d.RigParts),
 			("root drift  : %.2f now, %.2f max"):format(d.Drift, d.MaxDrift),
 			("replicating : %s"):format(App.HasHiddenProps and "yes" or "NO (local only)"),
