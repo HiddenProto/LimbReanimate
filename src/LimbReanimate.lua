@@ -8,7 +8,7 @@
 	Repo: https://github.com/HiddenProto/LimbReanimate
 ]]
 
-local SCRIPT_VERSION = "1.8.0"
+local SCRIPT_VERSION = "1.8.1"
 
 --==============================================================================
 -- 0. SINGLE INSTANCE GUARD
@@ -36,6 +36,12 @@ local CoreGui          = cloneref(game:GetService("CoreGui"))
 
 local Player = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
+
+-- IsDescendantOf compares instance identity, and a cloneref'd service is not
+-- guaranteed to compare equal to the real one on every executor. If it does
+-- not, every joint looks detached and none are ever driven. The reference
+-- script uses the raw global here, so we do too.
+local RawWorkspace = workspace
 
 --==============================================================================
 -- 2. EXECUTOR CAPABILITY SHIM
@@ -911,6 +917,10 @@ LR.Diag = {
 	RigType = "?",
 	Mapped = 0,
 	Unmapped = 0,
+	-- How many Motor6Ds your real body actually has. Without this, "0 driven"
+	-- cannot be told apart from "your body has no joints to drive".
+	RealJoints = 0,
+	RigParts = 0,
 	Drift = 0,
 	MaxDrift = 0,
 }
@@ -1113,8 +1123,8 @@ function LR.Start()
 				end))
 			end
 		elseif v:IsA("Motor6D") then
-			repeat task.wait() until (not v:IsDescendantOf(Workspace)) or (v.Part0 and v.Part1)
-			if not v:IsDescendantOf(Workspace) then return end
+			repeat task.wait() until (not v:IsDescendantOf(RawWorkspace)) or (v.Part0 and v.Part1)
+			if not v:IsDescendantOf(RawWorkspace) then return end
 			local p0, p1 = v.Part0, v.Part1
 			if p0 and p1 then
 				p0, p1 = p0.Name, p1.Name
@@ -1349,6 +1359,35 @@ function LR.Start()
 		end
 	end
 
+	--[[
+		Wait for the joints to actually exist.
+
+		CharacterAdded fires before the character is finished: its parts and
+		Motor6Ds stream in over the following frames. Building the rig on that
+		frame gives a rig with no joints -- the skeleton refuses to build, the
+		clone falls out empty, and nothing is ever driven. Diagnostics for that
+		read "0 driven" with a root drift near zero, because the root writes are
+		landing fine and there is simply nothing hanging off it.
+	]]
+	do
+		LR.Status = "WAITING FOR JOINTS"
+		local deadline = os.clock() + 5
+		while os.clock() < deadline and not Reanimate.Stopping do
+			local c = Player.Character
+			local found = false
+			if c then
+				for _, d in c:GetDescendants() do
+					if d:IsA("Motor6D") and d.Part0 and d.Part1 then
+						found = true
+						break
+					end
+				end
+			end
+			if found then break end
+			task.wait()
+		end
+	end
+
 	if not Reanimate.CreateCharacter(InitCFrame) then
 		-- No usable rig. Stopping here beats driving the body at a rig that
 		-- cannot resolve, which would strand it in the void.
@@ -1478,6 +1517,7 @@ function LR.Start()
 	Reanimate.Starting = false
 
 	local lastRootTarget = nil
+	local lastJointScan = 0
 	LR.Diag.MaxDrift = 0
 
 	while not Reanimate.Stopping do
@@ -1620,6 +1660,18 @@ function LR.Start()
 					LR.LimbList = list
 					LR.LimbListVersion += 1
 				end
+				-- Throttled: a character with accessories is a lot of
+				-- descendants to walk every frame.
+				if os.clock() - lastJointScan > 0.5 then
+					lastJointScan = os.clock()
+					local real = 0
+					for _, d in Character:GetDescendants() do
+						if d:IsA("Motor6D") then real += 1 end
+					end
+					LR.Diag.RealJoints = real
+					LR.Diag.RigParts = RC and #Reanimate.RigBodyParts or 0
+				end
+
 				LR.Diag.Mapped = mapped
 				LR.Diag.Unmapped = #UnknownMotor6Ds
 				LR.Diag.RigType = (Humanoid.RigType == Enum.HumanoidRigType.R6) and "R6" or "R15"
@@ -2384,6 +2436,8 @@ local statusConn = RunService.Heartbeat:Connect(function()
 			("your rig    : %s"):format(d.RigType),
 			("rig source  : %s"):format(Reanimate.RigKind or "?"),
 			("joints      : %d driven, %d pinned"):format(d.Mapped, d.Unmapped),
+			("your body   : %d joints"):format(d.RealJoints),
+			("rig parts   : %d"):format(d.RigParts),
 			("root drift  : %.2f now, %.2f max"):format(d.Drift, d.MaxDrift),
 			("replicating : %s"):format(App.HasHiddenProps and "yes" or "NO (local only)"),
 		}, "\n")

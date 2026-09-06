@@ -29,10 +29,10 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/HiddenProto/LimbReani
 change under you. A new one is published with every update:
 
 ```lua
-loadstring(game:HttpGet("https://raw.githubusercontent.com/HiddenProto/LimbReanimate/v1.8.0/src/LimbReanimate.lua"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/HiddenProto/LimbReanimate/v1.8.1/src/LimbReanimate.lua"))()
 ```
 
-Current release: **v1.8.0**
+Current release: **v1.8.1**
 
 ---
 
@@ -88,9 +88,16 @@ The menu shows live numbers while running:
 your rig    : R15
 rig source  : Skeleton (auto)
 joints      : 14 driven, 0 pinned
+your body   : 14 joints
+rig parts   : 15
 root drift  : 1.84 now, 2.03 max
 replicating : yes
 ```
+
+Read `driven` against `your body`. If they match, everything your character has
+is being posed. `0 driven` with a healthy `your body` count means the joints
+exist but were never matched; `0 driven` with `your body : 0` means the rig was
+built before the character finished streaming in.
 
 **Root drift** is the distance between where the root was written last frame and
 where it actually is now. **~2 studs is the normal settle band.** Hundreds means
