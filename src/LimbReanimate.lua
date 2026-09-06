@@ -8,7 +8,7 @@
 	Repo: https://github.com/HiddenProto/LimbReanimate
 ]]
 
-local SCRIPT_VERSION = "1.12.1"
+local SCRIPT_VERSION = "1.13.0"
 
 --==============================================================================
 -- 0. SINGLE INSTANCE GUARD
@@ -649,9 +649,8 @@ Reanimate.ActiveRigSource = 0 -- latched at Start; the map is built against it
 Reanimate.RigParts = {}       -- cached BaseParts of the rig, for the hide loop
 
 Reanimate.AnimateRig = true
--- 0 = Roblox animations (LoadAnimation)   1 = built-in procedural pose
-Reanimate.AnimStyle = 0
 Reanimate.TrackCount = 0
+Reanimate.AnimInfo = "-"
 Reanimate.AnimIds = nil       -- harvested off your real Animate script
 Reanimate.Animator = nil      -- the rig's Animator, exposed for custom players
 Reanimate.Tracks = nil        -- slot -> AnimationTrack
@@ -723,100 +722,6 @@ local function HarvestAnimIds(character, requireR6)
 	return found and out or nil
 end
 
---[[
-	PROCEDURAL POSE.
-
-	A walk/idle written in code, posing the rig's joints directly. No assets, no
-	LoadAnimation, nothing to fail to load -- which is how the reference script
-	does all of its motion, and the only way to animate a rig when Roblox
-	animations are unavailable.
-
-	Angles are about the joint's X axis: on R15 the RigAttachment frames are
-	oriented so that is the forward/back swing. R6 is approximate.
-]]
-local PROC_JOINTS = {
-	[Enum.HumanoidRigType.R15] = {
-		hipL = "LeftHip", hipR = "RightHip",
-		shoL = "LeftShoulder", shoR = "RightShoulder",
-		kneeL = "LeftKnee", kneeR = "RightKnee",
-		elbL = "LeftElbow", elbR = "RightElbow",
-		neck = "Neck", waist = "Waist",
-	},
-	[Enum.HumanoidRigType.R6] = {
-		hipL = "Left Hip", hipR = "Right Hip",
-		shoL = "Left Shoulder", shoR = "Right Shoulder",
-		neck = "Neck",
-	},
-}
-
-local function CollectProcJoints(RC, rigType)
-	local names = PROC_JOINTS[rigType] or PROC_JOINTS[Enum.HumanoidRigType.R6]
-	local found = {}
-	for _, d in RC:GetDescendants() do
-		if d:IsA("Motor6D") then
-			for key, jname in names do
-				if d.Name == jname then
-					found[key] = d
-				end
-			end
-		end
-	end
-	return found
-end
-
-local function ProceduralPose(j, phase, speed, airborne)
-	local function set(motor, cf)
-		if motor then motor.Transform = cf end
-	end
-
-	if airborne then
-		-- Arms up, legs tucked, so a jump reads as a jump.
-		set(j.shoL, CFrame.Angles(-2.2, 0, 0))
-		set(j.shoR, CFrame.Angles(-2.2, 0, 0))
-		set(j.hipL, CFrame.Angles(-0.35, 0, 0))
-		set(j.hipR, CFrame.Angles(0.2, 0, 0))
-		set(j.kneeL, CFrame.Angles(-0.6, 0, 0))
-		set(j.kneeR, CFrame.Angles(-0.2, 0, 0))
-		set(j.elbL, CFrame.identity)
-		set(j.elbR, CFrame.identity)
-		set(j.neck, CFrame.identity)
-		set(j.waist, CFrame.identity)
-		return
-	end
-
-	local moving = speed > 0.5
-	local swing = math.sin(phase)
-
-	if not moving then
-		-- Idle: a slow breath, so a standing rig is not a statue.
-		local b = math.sin(phase * 0.5) * 0.05
-		set(j.shoL, CFrame.Angles(b, 0, 0.08))
-		set(j.shoR, CFrame.Angles(b, 0, -0.08))
-		set(j.hipL, CFrame.identity)
-		set(j.hipR, CFrame.identity)
-		set(j.kneeL, CFrame.identity)
-		set(j.kneeR, CFrame.identity)
-		set(j.elbL, CFrame.identity)
-		set(j.elbR, CFrame.identity)
-		set(j.neck, CFrame.Angles(b * 0.5, 0, 0))
-		set(j.waist, CFrame.Angles(b * 0.3, 0, 0))
-		return
-	end
-
-	local amp = math.clamp(speed / 16, 0.25, 1.5)
-	set(j.hipL, CFrame.Angles(swing * amp, 0, 0))
-	set(j.hipR, CFrame.Angles(-swing * amp, 0, 0))
-	set(j.shoL, CFrame.Angles(-swing * amp * 0.8, 0, 0))
-	set(j.shoR, CFrame.Angles(swing * amp * 0.8, 0, 0))
-	-- Knees only bend one way, and only on the trailing leg.
-	set(j.kneeL, CFrame.Angles(-math.max(0, -swing) * amp * 0.9, 0, 0))
-	set(j.kneeR, CFrame.Angles(-math.max(0, swing) * amp * 0.9, 0, 0))
-	set(j.elbL, CFrame.Angles(-math.max(0, swing) * amp * 0.4, 0, 0))
-	set(j.elbR, CFrame.Angles(-math.max(0, -swing) * amp * 0.4, 0, 0))
-	set(j.neck, CFrame.identity)
-	set(j.waist, CFrame.Angles(0, -swing * amp * 0.12, 0))
-end
-
 local function SetupRigAnimation(RC, hum, root)
 	local animator = hum:FindFirstChildOfClass("Animator")
 	if not animator then
@@ -847,16 +752,10 @@ local function SetupRigAnimation(RC, hum, root)
 	for _ in tracks do nTracks += 1 end
 	Reanimate.TrackCount = nTracks
 
-	-- Nothing loaded means Roblox animations cannot work here at all, so fall
-	-- straight to the procedural pose rather than sitting rigid.
-	if nTracks == 0 and Reanimate.AnimStyle == 0 then
-		Reanimate.AnimStyle = 1
-		warn("[LimbReanimate] no animation tracks could be loaded; switching to "
-			.. "the built-in procedural pose.")
+	if nTracks == 0 then
+		warn("[LimbReanimate] no animation tracks could be loaded, so the rig has "
+			.. "nothing to move it and your limbs will copy a rigid pose.")
 	end
-
-	local procJoints = CollectProcJoints(RC, hum.RigType)
-	local procPhase = 0
 
 	local current = nil
 	local function play(slot, speed)
@@ -869,7 +768,7 @@ local function SetupRigAnimation(RC, hum, root)
 		if track and speed then track:AdjustSpeed(speed) end
 	end
 
-	return RunService.Heartbeat:Connect(function(dt)
+	return RunService.Heartbeat:Connect(function()
 		if not RC.Parent then return end
 		-- Turn this off to drive the rig yourself. Leaving it on while a custom
 		-- animator also poses the rig means the two fight every frame.
@@ -882,27 +781,7 @@ local function SetupRigAnimation(RC, hum, root)
 		end
 		local st = hum:GetState()
 
-		if Reanimate.AnimStyle == 1 then
-			if current then
-				current:Stop(0.1)
-				current = nil
-			end
-			local v = root.AssemblyLinearVelocity
-			local speed = Vector3.new(v.X, 0, v.Z).Magnitude
-			local airborne = st == Enum.HumanoidStateType.Freefall
-				or st == Enum.HumanoidStateType.Jumping
-			-- Cadence follows speed, so the legs match the ground you cover.
-			procPhase += dt * (speed > 0.5 and math.clamp(speed * 1.1, 3, 22) or 2)
-			ProceduralPose(procJoints, procPhase, speed, airborne)
-			LR.Diag.Anim = ("procedural, %d joints"):format((function()
-				local n = 0
-				for _ in procJoints do n += 1 end
-				return n
-			end)())
-			return
-		end
-
-		LR.Diag.Anim = ("roblox, %d tracks"):format(Reanimate.TrackCount or 0)
+		Reanimate.AnimInfo = ("roblox, %d tracks"):format(Reanimate.TrackCount or 0)
 
 		if hum.Sit or st == Enum.HumanoidStateType.Seated then
 			play("sit", 1)
@@ -1217,7 +1096,6 @@ LR.Diag = {
 	-- number a rebuilt skeleton is indistinguishable from a jointless clone.
 	RigJoints = 0,
 	PartsDriven = 0,
-	Anim = "-",
 	Drift = 0,
 	MaxDrift = 0,
 }
@@ -2700,13 +2578,6 @@ do
 	Reanimate.SyncAnimateToggle = setAnim
 end
 
-dropdown(body, "Animation Style", {
-	"Roblox animations",
-	"Procedural (built-in)",
-}, Reanimate.AnimStyle + 1, function(i) Reanimate.AnimStyle = i - 1 end)
-label(body,
-	"Procedural poses the rig from code -- no assets, nothing to load, works when Roblox animations do not. Chosen automatically if no tracks load.",
-	11, COL.DIM, Enum.TextXAlignment.Center)
 label(body,
 	"Plays your own character animations on the rig, which is what your real limbs then copy. Turn OFF to hand the rig's Animator to your own script instead.",
 	11, COL.DIM, Enum.TextXAlignment.Center)
@@ -2864,7 +2735,7 @@ local statusConn = RunService.Heartbeat:Connect(function()
 				or ("drive  : joints, %d driven, %d pinned"):format(d.Mapped, d.Unmapped),
 			("root   : %s, y %.0f"):format(d.RootMode, d.RootY),
 			("drift  : %.2f now, %.2f max"):format(d.Drift, d.MaxDrift),
-			("anim   : %s"):format(Reanimate.AnimateRig and d.Anim or "off"),
+			("anim   : %s"):format(Reanimate.AnimateRig and (Reanimate.AnimInfo or "-") or "off"),
 			("replic : %s"):format(App.HasHiddenProps and "yes" or "NO (local only)"),
 		}, "\n")
 		-- A rig with no joints of its own is the one state nothing recovers from.
