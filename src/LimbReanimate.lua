@@ -8,7 +8,7 @@
 	Repo: https://github.com/HiddenProto/LimbReanimate
 ]]
 
-local SCRIPT_VERSION = "1.7.0"
+local SCRIPT_VERSION = "1.8.0"
 
 --==============================================================================
 -- 0. SINGLE INSTANCE GUARD
@@ -430,6 +430,97 @@ local function BuildOriginRig()
 	return clone
 end
 
+--[[
+	SKELETON RIG.
+
+	A plain-part copy of your real rig's STRUCTURE -- same part names, same
+	sizes, same joints with the same C0/C1 -- and nothing else. No meshes, no
+	accessories, no clothing, no attributes left behind by game scripts.
+
+	This is what makes R15 a first-class rig rather than a 6-joint
+	approximation. It is built from whatever rig you actually have, so it works
+	for R6, R15 and custom rigs alike, and like the origin clone it maps
+	identity: joint X drives joint X.
+
+	Cheaper and far less fragile than cloning -- there is no Archivable problem
+	and nothing to strip afterwards.
+]]
+local function BuildSkeletonRig()
+	local src = Player.Character
+	local srcHum = src and src:FindFirstChildOfClass("Humanoid")
+	if not srcHum then return nil, "no Humanoid to mirror" end
+	local srcRoot = srcHum.RootPart
+	if not srcRoot then return nil, "no RootPart to mirror" end
+
+	local char = Instance.new("Model")
+	char.Name = "LimbReanimate_Skeleton"
+
+	local ff = Util.Instance("ForceField", char)
+	ff.Visible = false
+
+	local hum = Util.Instance("Humanoid", char)
+	hum.Name = "Humanoid"
+	hum.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+	hum.RequiresNeck = false
+	hum.BreakJointsOnDeath = false
+	hum.UseJumpPower = true
+	hum.WalkSpeed = 16
+	hum.JumpPower = 50
+	hum.MaxSlopeAngle = 89
+	hum.AutoRotate = true
+	-- RigType and HipHeight must match or an R15 Humanoid will not stand right.
+	pcall(function() hum.RigType = srcHum.RigType end)
+	pcall(function() hum.HipHeight = srcHum.HipHeight end)
+	hum:SetStateEnabled(Enum.HumanoidStateType.Dead, false)
+
+	local made = {}
+	local function mirror(realPart)
+		local existing = made[realPart.Name]
+		if existing then return existing end
+		local p = Instance.new("Part")
+		p.Name = realPart.Name
+		p.Size = realPart.Size
+		p.CFrame = realPart.CFrame
+		p.Transparency = 1
+		p.CanCollide = false
+		p.CastShadow = false
+		p.TopSurface = Enum.SurfaceType.Smooth
+		p.BottomSurface = Enum.SurfaceType.Smooth
+		p.LeftSurface = Enum.SurfaceType.Smooth
+		p.RightSurface = Enum.SurfaceType.Smooth
+		p.FrontSurface = Enum.SurfaceType.Smooth
+		p.BackSurface = Enum.SurfaceType.Smooth
+		p.Parent = char
+		made[realPart.Name] = p
+		return p
+	end
+
+	-- Root first, so the model always has a primary part.
+	mirror(srcRoot)
+
+	local joints = 0
+	for _, d in src:GetDescendants() do
+		if d:IsA("Motor6D") and d.Part0 and d.Part1 then
+			local m = Instance.new("Motor6D")
+			m.Name = d.Name
+			m.Part0 = mirror(d.Part0)
+			m.Part1 = mirror(d.Part1)
+			m.C0 = d.C0
+			m.C1 = d.C1
+			m.MaxVelocity = 0
+			m.Parent = m.Part0
+			joints += 1
+		end
+	end
+	if joints == 0 then
+		char:Destroy()
+		return nil, "no Motor6D joints to mirror"
+	end
+
+	char.PrimaryPart = made[srcRoot.Name]
+	return char
+end
+
 --==============================================================================
 -- 6. REANIMATE STATE + CONTROL
 --==============================================================================
@@ -626,22 +717,36 @@ function Reanimate.CreateCharacter(InitCFrame)
 	Reanimate.DestroyCharacter()
 
 	local origin = Reanimate.ActiveRigSource == 1
-	local RC
-	if origin then
-		local built, err = BuildOriginRig()
-		if built then
-			RC = built
+	local RC, why
+
+	--[[
+		When the mapping is identity, the rig MUST structurally match the real
+		character -- an identity map has nothing to resolve against otherwise,
+		and a mismatched root entry would leave the body parked in the void. So
+		the fallback chain stays inside the identity-capable rigs, and we abort
+		rather than hand back something that cannot work.
+	]]
+	if Reanimate.WantIdentityRig then
+		if origin then
+			RC, why = BuildOriginRig()
+			if not RC then RC, why = BuildSkeletonRig() end
 		else
-			-- Never leave the player with no rig at all.
-			warn("[LimbReanimate] origin rig unavailable (" .. tostring(err) .. "), using built-in R6")
-			origin = false
-			Reanimate.ActiveRigSource = 0
-			RC = BuildFakeRig()
+			RC, why = BuildSkeletonRig()
+			if not RC then RC, why = BuildOriginRig() end
+		end
+		if not RC then
+			warn("[LimbReanimate] could not build a rig: " .. tostring(why))
+			return nil
 		end
 	else
 		RC = BuildFakeRig()
 	end
-	Reanimate.IsOrigin = origin
+
+	Reanimate.IsOrigin = RC.Name == "LimbReanimate_OriginRig"
+	Reanimate.RigKind = (RC.Name == "LimbReanimate_OriginRig" and "Origin clone")
+		or (RC.Name == "LimbReanimate_Skeleton" and "Skeleton (auto)")
+		or "Built-in R6"
+	origin = Reanimate.IsOrigin
 
 	pcall(function() RC.ModelStreamingMode = Enum.ModelStreamingMode.Persistent end)
 	-- Without this the engine unloads the void-parked real root and our writes
@@ -876,6 +981,23 @@ function LR.Start()
 	Reanimate.ActiveRigSource = Reanimate.RigSource
 	local OriginMode = Reanimate.ActiveRigSource == 1
 
+	--[[
+		Which mapping to use has to be settled here, before the joints are
+		discovered and before the rig is built.
+
+		The hardcoded R6 rig needs the conversion table. Every other rig is
+		structurally the real character, so the map is identity -- and that is
+		what makes R15 first class instead of a 6-joint approximation: the
+		built-in path builds a skeleton from your own rig when you are R15.
+	]]
+	local myRigType do
+		local c = Player.Character
+		local h = c and c:FindFirstChildOfClass("Humanoid")
+		myRigType = h and h.RigType or Enum.HumanoidRigType.R6
+	end
+	local IdentityMap = OriginMode or (myRigType == Enum.HumanoidRigType.R15)
+	Reanimate.WantIdentityRig = IdentityMap
+
 	-- Origin mode exists to hand the rig to your own scripts, so the built-in
 	-- driver starts out of the way. The Animator is still there for you to load
 	-- onto -- this switches off our driver, not the rig's ability to animate.
@@ -930,7 +1052,7 @@ function LR.Start()
 	if Player.Character then
 		-- Harvest BEFORE the kill: the pre-kill character still has an intact
 		-- Animate script to read the ids out of.
-		Reanimate.AnimIds = HarvestAnimIds(Player.Character, not OriginMode) or Reanimate.AnimIds
+		Reanimate.AnimIds = HarvestAnimIds(Player.Character, not IdentityMap) or Reanimate.AnimIds
 		local h = Player.Character:FindFirstChildOfClass("Humanoid")
 		if h and h.RootPart then
 			InitCFrame = h.RootPart.CFrame
@@ -943,7 +1065,7 @@ function LR.Start()
 	-- Built-in mode needs the conversion table. Origin mode does not: the rig is
 	-- a clone of the thing being driven, so the map is identity and is built
 	-- from the real character's own joints as they are discovered.
-	local LimbMapping = OriginMode and {} or MakeLimbMap()
+	local LimbMapping = IdentityMap and {} or MakeLimbMap()
 
 	----------------------------------------------------------------------------
 	-- Tool mirroring: the real Tool stays on the real (puppeted) character, so
@@ -1005,7 +1127,7 @@ function LR.Start()
 				-- Origin mode: identity. Same joint, same part names, no
 				-- conversion. The root joint still substitutes the REAL root
 				-- part so it keeps absorbing the void offset.
-				if OriginMode then
+				if IdentityMap then
 					table.insert(LimbMapping, {
 						Part0 = p0,
 						Part1 = p1,
@@ -1095,7 +1217,7 @@ function LR.Start()
 		lastspawn = os.clock()
 		table.clear(BaseParts)
 		table.clear(UnknownMotor6Ds)
-		if OriginMode then
+		if IdentityMap then
 			-- Entries are discovered, not fixed, so drop them entirely.
 			table.clear(LimbMapping)
 		else
@@ -1122,7 +1244,7 @@ function LR.Start()
 			end
 		end
 		if animate then
-			Reanimate.AnimIds = HarvestAnimIds(character, not OriginMode) or Reanimate.AnimIds
+			Reanimate.AnimIds = HarvestAnimIds(character, not IdentityMap) or Reanimate.AnimIds
 			-- In no-respawn mode it is only disabled (by the LocalScript branch
 			-- above) so it can be switched back on when we hand the body back.
 			if not NoRespawn then
@@ -1227,7 +1349,17 @@ function LR.Start()
 		end
 	end
 
-	Reanimate.CreateCharacter(InitCFrame)
+	if not Reanimate.CreateCharacter(InitCFrame) then
+		-- No usable rig. Stopping here beats driving the body at a rig that
+		-- cannot resolve, which would strand it in the void.
+		CharConn:Disconnect()
+		if NoRespawn then pcall(RestoreCharacter) end
+		pcall(function() Workspace.FallenPartsDestroyHeight = FallenPartsDestroyHeight end)
+		Reanimate.Starting = false
+		Reanimate.Stopping = false
+		LR.Status = "RIG BUILD FAILED"
+		return
+	end
 	LR.Status = "RUNNING"
 
 	----------------------------------------------------------------------------
@@ -2208,30 +2340,33 @@ end
 	failed clone still reaches the built-in rig, because having no rig at all
 	would be worse.
 ]]
-local r15Gated = false
-local function GateRigSourceForR15()
+--[[
+	Built-in is no longer R6-only, so nothing is greyed out any more: on an R15
+	character it builds a skeleton from your own rig instead of the hardcoded R6
+	one, and the mapping switches to identity to match. This just says which one
+	you are going to get.
+]]
+local r15Shown = nil
+local function ShowRigSourceKind()
 	local char = Player.Character
 	local hum = char and char:FindFirstChildOfClass("Humanoid")
 	if not hum then return end
 	local isR15 = hum.RigType == Enum.HumanoidRigType.R15
-	if isR15 == r15Gated then return end
-	r15Gated = isR15
+	if isR15 == r15Shown then return end
+	r15Shown = isR15
 
-	rigSrcSetDisabled(1, isR15, " -- no R15 variant")
-	rigSrcWarn.Visible = isR15
-	if isR15 then
-		rigSrcWarn.Text = "Your rig is R15. There is no built-in R15 rig, so Origin Only is being used."
-		if Reanimate.RigSource == 0 then
-			Reanimate.RigSource = 1
-			rigSrcSetIndex(2)
-		end
-	end
+	rigSrcSetDisabled(1, false)
+	rigSrcWarn.Visible = true
+	rigSrcWarn.TextColor3 = COL.DIM
+	rigSrcWarn.Text = isR15
+		and "Your rig is R15. Built-in will auto-build an R15 skeleton from it, identity-mapped."
+		or "Your rig is R6. Built-in will use the hardcoded R6 skeleton."
 end
 
 local statusConn = RunService.Heartbeat:Connect(function()
 	if not statusLabel.Parent then return end
 
-	pcall(GateRigSourceForR15)
+	pcall(ShowRigSourceKind)
 
 	-- The joint set is only known once a reanimate has discovered it, and it
 	-- changes with rig source and rig type, so the panel follows it.
@@ -2247,7 +2382,7 @@ local statusConn = RunService.Heartbeat:Connect(function()
 		local d = LR.Diag
 		diagLabel.Text = table.concat({
 			("your rig    : %s"):format(d.RigType),
-			("rig source  : %s"):format(Reanimate.IsOrigin and "Origin clone" or "Built-in R6"),
+			("rig source  : %s"):format(Reanimate.RigKind or "?"),
 			("joints      : %d driven, %d pinned"):format(d.Mapped, d.Unmapped),
 			("root drift  : %.2f now, %.2f max"):format(d.Drift, d.MaxDrift),
 			("replicating : %s"):format(App.HasHiddenProps and "yes" or "NO (local only)"),

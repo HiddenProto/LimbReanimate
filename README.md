@@ -29,10 +29,10 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/HiddenProto/LimbReani
 change under you. A new one is published with every update:
 
 ```lua
-loadstring(game:HttpGet("https://raw.githubusercontent.com/HiddenProto/LimbReanimate/v1.7.0/src/LimbReanimate.lua"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/HiddenProto/LimbReanimate/v1.8.0/src/LimbReanimate.lua"))()
 ```
 
-Current release: **v1.7.0**
+Current release: **v1.8.0**
 
 ---
 
@@ -48,8 +48,8 @@ Same options as Uhhhhhh's Limbs page.
 | **RootPart Mode** | Where the real root part gets parked. 5 options — see below. |
 | **RootPart Velocity** | What velocity the parked root is given each frame. |
 | **Init Mode** | How the character enters the reanimated state — including **No Respawn**, which never kills you. |
-| **Rig Source** | `Built-in R6` or `Origin Only` — see below. On an R15 character the built-in option is greyed out and Origin Only is selected for you. |
-| **Animate Fake Rig** | Plays your own character animations on the rig, which your real limbs then copy. On for Built-in R6; **forced off when Origin Only starts**, since that mode exists to hand the rig to your own script. The Animator is there either way. |
+| **Rig Source** | `Built-in` or `Origin Only` — see below. Built-in adapts to your rig type: hardcoded R6 skeleton on R6, auto-built skeleton on R15. |
+| **Animate Fake Rig** | Plays your own character animations on the rig, which your real limbs then copy. On for Built-in; **forced off when Origin Only starts**, since that mode exists to hand the rig to your own script. The Animator is there either way. |
 | Show me how I look! | Throttles joint writes to 10/s, so you see roughly what other players receive. |
 | Target Fling Enabled | Lets `Fling()` queue targets. Touching a player takes network ownership of them. |
 | Use NaN State Fling | Uses a NaN `MoveDirectionInternal` instead of a huge velocity to do the flinging. |
@@ -86,8 +86,8 @@ The menu shows live numbers while running:
 
 ```
 your rig    : R15
-rig source  : Built-in R6
-joints      : 6 driven, 8 pinned
+rig source  : Skeleton (auto)
+joints      : 14 driven, 0 pinned
 root drift  : 1.84 now, 2.03 max
 replicating : yes
 ```
@@ -98,7 +98,7 @@ something is winning against the writes — the readout turns red past 50.
 
 `joints: N driven` is how many of your real Motor6Ds are actually being posed.
 `pinned` are ones with no mapping, held at identity. On R15 with the built-in R6
-rig, expect **6 driven, 8 pinned** — elbows, wrists, knees, ankles and the waist
+rig you would see only **6 driven, 8 pinned** — elbows, wrists, knees, ankles and the waist
 have no R6 equivalent, so they stay at rest.
 
 **Rig Source** and **Init Mode** apply on the next reanimate. Everything else is
@@ -106,41 +106,52 @@ read every frame and applies live.
 
 ### Rig Source
 
-| | Built-in R6 | Origin Only |
-|---|---|---|
-| The rig is | a hardcoded invisible R6 skeleton | a **clone of your real character** |
-| Mapping | conversion table, R6 rig → R6/R15 real | **identity** — joint X drives joint X |
-| Part & joint names | always R6 (`Torso`, `Left Arm`) | **your real ones**, R6 or R15 |
-| Proportions | generic R6 | your actual avatar's |
-| Animator | yes | yes |
-| Built-in driver | on | **off** — the rig is yours to drive |
-| Animation ids | R6 only, stock fallback | **your own**, whatever your rig type |
+| | Built-in (R6 character) | Built-in (R15 character) | Origin Only |
+|---|---|---|---|
+| The rig is | a hardcoded R6 skeleton | a **skeleton auto-built from your rig** | a **clone of your character** |
+| Mapping | conversion table | **identity** | **identity** |
+| Part & joint names | R6 (`Torso`, `Left Arm`) | **your real ones** | **your real ones** |
+| Proportions | generic R6 | your avatar's | your avatar's |
+| Meshes / accessories | none | none | yes, cloned |
+| Animator | yes | yes | yes |
+| Built-in driver | on | on | **off** — the rig is yours |
 
-Origin Only makes the rig **pass for a real character**. Real part names, real
-joint names, real proportions, a real Humanoid and a real Animator — so an
-external animation script written against a reanimated character can just point
-at it and work, with no conversion to reason about. Whatever you do to a rig
-joint happens to the matching real joint.
+Origin Only makes the rig **pass for a real character** — real part names, real
+joint names, real proportions, a real Humanoid and a real Animator, plus your
+actual meshes and accessories. An external animation script written against a
+reanimated character can point at it and work, with no conversion to reason
+about. Whatever you do to a rig joint happens to the matching real joint.
 
-If the clone fails for any reason it falls back to the built-in R6 rig and warns
-rather than leaving you with no rig.
+The auto skeleton gives you the same names and mapping without the meshes, so
+prefer Origin Only when something needs to *look* like your character, and the
+skeleton when you only need it to *move* like it.
 
 ### R15
 
-**There is no built-in R15 rig.** On an R15 character the built-in R6 option is
-greyed out and Origin Only is selected automatically, because:
+**R15 is first class. Everything that works on R6 works on R15.**
 
-- the built-in rig is R6, so the map can only reach **6 of your ~14 joints** —
-  everything past an elbow or knee has no R6 counterpart and stays pinned at
-  rest. It is an approximation, not a reanimate;
-- Origin Only clones your actual R15 body, so the mapping is identity and
-  **every** joint is driven, with your real R15 names and proportions.
+The only thing that was ever R6-specific was the rig, and `Built-in` is no
+longer R6-only — it picks by your rig type:
 
-Only the dropdown entry is blocked. The internal fallback that catches a failed
-clone can still reach the built-in rig, since no rig at all would be worse.
+| Your character | Built-in gives you | Mapping |
+|---|---|---|
+| R6 | the hardcoded R6 skeleton | conversion table |
+| R15 | a **skeleton auto-built from your own rig** | identity |
 
-Everything else — RootPart Mode, Velocity, Init Mode, fling, Hide Limbs — is
-rig-agnostic and behaves identically on R15.
+The auto skeleton is a plain-part copy of your rig's *structure* — same part
+names, same sizes, same joints with the same `C0`/`C1`, and nothing else. No
+meshes, no accessories, no clothing. Built from whatever rig you actually have,
+so R6, R15 and custom rigs all work, and every joint is driven rather than the
+6 an R6 rig could reach.
+
+It is also cheaper and less fragile than cloning: no `Archivable` problem and
+nothing to strip afterwards. If it ever fails it falls back to the origin clone,
+and if that fails too the reanimate **stops** rather than driving your body at a
+rig that cannot resolve — which would strand it in the void.
+
+Everything else — RootPart Mode, Velocity, Init Mode, fling, the Hide Limbs
+panel — was already rig-agnostic. The panel builds its list from your real
+joints, so on R15 it lists all of them.
 
 ### Driving the rig yourself
 
