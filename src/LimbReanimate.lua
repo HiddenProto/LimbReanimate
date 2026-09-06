@@ -8,7 +8,7 @@
 	Repo: https://github.com/HiddenProto/LimbReanimate
 ]]
 
-local SCRIPT_VERSION = "1.13.0"
+local SCRIPT_VERSION = "1.14.0"
 
 --==============================================================================
 -- 0. SINGLE INSTANCE GUARD
@@ -138,11 +138,16 @@ function Util.SetMotor6DTransform(motor, transform)
 	SetHidden(motor, "ReplicateCurrentOffset6D", transform.Position)
 	SetHidden(motor, "ReplicateCurrentAngle6D", axis * angle)
 
-	-- Local-only fallback so the rig still looks right to you without
-	-- hidden-property support. Does not replicate.
-	if not App.HasHiddenProps then
-		pcall(function() motor.Transform = transform end)
-	end
+	--[[
+		Write the LOCAL pose too, always -- not only as a fallback.
+
+		The two hidden properties above are what the replicator sends; they do
+		not pose the joint on this client. Without Transform the joint moves for
+		everyone except you, which is why hiding a limb looked like it merely
+		stopped following the rig: the follow-write stopped and the hide-write
+		never landed on your own screen.
+	]]
+	pcall(function() motor.Transform = transform end)
 end
 
 -- offset = where we want Part1 to sit, expressed in Part0's object space.
@@ -768,7 +773,21 @@ local function SetupRigAnimation(RC, hum, root)
 		if track and speed then track:AdjustSpeed(speed) end
 	end
 
-	return RunService.Heartbeat:Connect(function()
+	--[[
+		A rig built by this script is not the player's character, and its
+		Animator does not reliably step itself. When it does not, tracks report
+		IsPlaying while TimePosition never advances -- so the rig holds one pose
+		and every limb copying it looks rigid.
+
+		Rather than always stepping (which would double-speed the animation
+		wherever the engine DOES step it), watch for a track that is playing but
+		frozen, and only then take over.
+	]]
+	local manualStep = false
+	local stalled = 0
+	local lastPos = -1
+
+	return RunService.Heartbeat:Connect(function(dt)
 		if not RC.Parent then return end
 		-- Turn this off to drive the rig yourself. Leaving it on while a custom
 		-- animator also poses the rig means the two fight every frame.
@@ -781,7 +800,10 @@ local function SetupRigAnimation(RC, hum, root)
 		end
 		local st = hum:GetState()
 
-		Reanimate.AnimInfo = ("roblox, %d tracks"):format(Reanimate.TrackCount or 0)
+		Reanimate.AnimInfo = ("roblox, %d trk%s"):format(
+			Reanimate.TrackCount or 0,
+			(Reanimate.TrackCount or 0) == 0 and " (NONE)"
+				or (manualStep and ", stepped" or ", auto"))
 
 		if hum.Sit or st == Enum.HumanoidStateType.Seated then
 			play("sit", 1)
@@ -799,6 +821,23 @@ local function SetupRigAnimation(RC, hum, root)
 			else
 				play("idle", 1)
 			end
+		end
+
+		if manualStep then
+			pcall(function() animator:StepAnimations(dt) end)
+		elseif current and current.IsPlaying then
+			local tp = current.TimePosition
+			if math.abs(tp - lastPos) < 1e-6 then
+				stalled += dt
+				if stalled > 0.35 then
+					manualStep = true
+					warn("[LimbReanimate] the rig's Animator is not advancing on its "
+						.. "own; stepping it manually from now on.")
+				end
+			else
+				stalled = 0
+			end
+			lastPos = tp
 		end
 	end)
 end

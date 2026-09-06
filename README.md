@@ -29,10 +29,10 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/HiddenProto/LimbReani
 change under you. A new one is published with every update:
 
 ```lua
-loadstring(game:HttpGet("https://raw.githubusercontent.com/HiddenProto/LimbReanimate/v1.13.0/src/LimbReanimate.lua"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/HiddenProto/LimbReanimate/v1.14.0/src/LimbReanimate.lua"))()
 ```
 
-Current release: **v1.13.0**
+Current release: **v1.14.0**
 
 ---
 
@@ -114,9 +114,15 @@ Read `driven` against `your body`:
 | **`your body : 0 joints`** | the body has no joints to drive. Check `body health` — if it is 0 the body is a corpse; if it is full, the game simply hands back a jointless character. Either way `Auto` falls through to **Loose Parts** |
 | `respawns: 0` | the kill never produced a new character at all |
 
-The `anim` line reports the animation tracks loaded onto the rig — `roblox, 7
-tracks` or `off`. **`roblox, 0 tracks` means nothing can move the rig**, so your
-limbs copy a rigid pose and only the root looks alive.
+The `anim` line reports the rig's animation state — `roblox, 7 trk, auto`,
+`roblox, 7 trk, stepped`, `roblox, 0 trk (NONE)`, or `off`.
+
+- **`0 trk (NONE)`** — no animation loaded, so nothing can move the rig and your
+  limbs copy a rigid pose while only the root looks alive.
+- **`stepped`** — a track was playing but its `TimePosition` never advanced, so
+  the rig's `Animator` was not stepping itself and this script took over. A rig
+  built by a script is not your character, and its Animator does not always run
+  on its own.
 
 **Root drift** is the distance between where the root was written last frame and
 where it actually is now. **~2 studs is the normal settle band.** Hundreds means
