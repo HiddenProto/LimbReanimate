@@ -29,10 +29,10 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/HiddenProto/LimbReani
 change under you. A new one is published with every update:
 
 ```lua
-loadstring(game:HttpGet("https://raw.githubusercontent.com/HiddenProto/LimbReanimate/v1.12.0/src/LimbReanimate.lua"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/HiddenProto/LimbReanimate/v1.12.1/src/LimbReanimate.lua"))()
 ```
 
-Current release: **v1.12.0**
+Current release: **v1.12.1**
 
 ---
 
@@ -65,15 +65,19 @@ A collapsible panel listing every joint the reanimate is actually driving,
 names on R15, and the full joint set in Origin Only. The head is just another
 row in it.
 
-Hiding a limb drives its joint to a hold position tens of thousands of studs
-away instead of to the rig. It is deliberately **not** a deletion:
+Hiding a limb drives its joint to a constant local offset 500 studs below where
+it would have been. It is deliberately **not** a deletion:
 
 - nothing is destroyed and no joint is broken, so clicking again restores it
   instantly and exactly;
 - the choice is keyed by joint name, so it survives a respawn and a
   re-reanimate;
 - each limb gets its own deterministic hold spot, so the same limb always goes
-  to the same place and they never pile up.
+  to the same place and they never pile up;
+- the offset is **local and rotation-free**, so the joint never churns and the
+  rest of the body is undisturbed. A fixed world point 70k studs away stretched
+  the assembly across that distance, which stiffened the other limbs and made
+  the head spin.
 
 Hiding a parent takes its children with it — hiding `LeftUpperArm` on R15 takes
 the lower arm and hand too, because they hang off it.

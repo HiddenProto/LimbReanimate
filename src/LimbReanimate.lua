@@ -8,7 +8,7 @@
 	Repo: https://github.com/HiddenProto/LimbReanimate
 ]]
 
-local SCRIPT_VERSION = "1.12.0"
+local SCRIPT_VERSION = "1.12.1"
 
 --==============================================================================
 -- 0. SINGLE INSTANCE GUARD
@@ -555,9 +555,6 @@ local function BuildSkeletonRig()
 	hum.JumpPower = 50
 	hum.MaxSlopeAngle = 89
 	hum.AutoRotate = true
-	-- RigType and HipHeight must match or an R15 Humanoid will not stand right.
-	pcall(function() hum.RigType = srcHum.RigType end)
-	pcall(function() hum.HipHeight = srcHum.HipHeight end)
 	hum:SetStateEnabled(Enum.HumanoidStateType.Dead, false)
 
 	local made = {}
@@ -614,7 +611,17 @@ local function BuildSkeletonRig()
 		return nil, "no joints to mirror and none could be rebuilt"
 	end
 
+	--[[
+		RigType is set LAST, once the parts and joints exist.
+
+		Set on a Humanoid with no body yet, the engine has nothing to validate
+		against, so an R15 rig could end up still considered R6 -- and R15
+		animations simply refuse to play on an R6-typed Humanoid. That is a rig
+		that looks correct in every count yet never moves.
+	]]
 	char.PrimaryPart = made[srcRoot.Name]
+	pcall(function() hum.RigType = srcHum.RigType end)
+	pcall(function() hum.HipHeight = srcHum.HipHeight end)
 	return char
 end
 
@@ -1331,21 +1338,27 @@ function LR.Start()
 		math.random(-500, -100) + FallenPartsDestroyHeight,
 		math.random(-2048, 2048)
 	)
-	-- Where hidden limbs are parked. Its own spot, well away from the root, so
-	-- a hidden limb never lands on the body it came off.
-	local limbholdposition = Vector3.new(
-		math.random(-65536, 65536),
-		math.random(-70000, -60000),
-		math.random(-65536, 65536)
-	)
-	-- Spread them apart deterministically, so the same limb always goes to the
-	-- same place and they do not pile up on one point.
-	local function HoldPositionFor(name)
+	--[[
+		Where a hidden limb goes.
+
+		This is a LOCAL offset, not a world point, and deliberately modest.
+
+		Sending it to a fixed spot 70,000 studs away looked tidier but was
+		wrong twice over. The body is still one assembly, so it stretched that
+		assembly across 70k studs and the physics degraded -- other limbs went
+		stiff. And expressing it in world space meant the offset had to be
+		recomputed against the parent's rotation every frame, so the joint's
+		rotation churned and the limb span wildly.
+
+		A constant, rotation-free translation 500 studs down is out of sight,
+		keeps the assembly small, and never changes frame to frame.
+	]]
+	local function HoldOffsetFor(name)
 		local n = 0
 		for i = 1, #name do
 			n += string.byte(name, i)
 		end
-		return limbholdposition + Vector3.new((n % 16) * 8, 0, (n // 16 % 16) * 8)
+		return CFrame.new((n % 16) * 4, -500, (n // 16 % 16) * 4)
 	end
 
 	local InitCFrame = nil
@@ -1751,7 +1764,9 @@ function LR.Start()
 					local target = RC:FindFirstChild(v.Name)
 					if target then
 						if LR.HiddenLimbs[v.Name] then
-							v.CFrame = CFrame.new(HoldPositionFor(v.Name))
+							-- Relative to where it would have been, so it stays
+							-- put instead of chasing a world point.
+							v.CFrame = target.CFrame * HoldOffsetFor(v.Name)
 						else
 							v.CFrame = target.CFrame
 						end
@@ -1790,14 +1805,10 @@ function LR.Start()
 				if flingtarget then
 					Util.SetMotor6DTransform(v, CFrame.identity)
 				elseif map.RPart0 ~= "ROOT" and LR.HiddenLimbs[map.Part1] then
-					-- Hidden: drive it to the hold position instead of the rig.
-					-- Same offset form as everything else, so it lands exactly
-					-- there, and nothing about the joint is destroyed.
-					local p0 = RC:FindFirstChild(map.RPart0)
-					if p0 then
-						Util.SetMotor6DOffset(v,
-							p0.CFrame:ToObjectSpace(CFrame.new(HoldPositionFor(map.Part1))))
-					end
+					-- Hidden: a constant local offset, so the joint's rotation
+					-- never changes and the rest of the body is undisturbed.
+					-- Nothing is destroyed, so un-hiding restores it exactly.
+					Util.SetMotor6DOffset(v, HoldOffsetFor(map.Part1))
 				else
 					local cf = CFrame.identity
 					local p0 = RC:FindFirstChild(map.RPart0)
