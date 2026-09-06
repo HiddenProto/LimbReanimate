@@ -29,10 +29,10 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/HiddenProto/LimbReani
 change under you. A new one is published with every update:
 
 ```lua
-loadstring(game:HttpGet("https://raw.githubusercontent.com/HiddenProto/LimbReanimate/v1.4.0/src/LimbReanimate.lua"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/HiddenProto/LimbReanimate/v1.5.0/src/LimbReanimate.lua"))()
 ```
 
-Current release: **v1.4.0**
+Current release: **v1.5.0**
 
 ---
 
@@ -54,6 +54,27 @@ Same options as Uhhhhhh's Limbs page.
 | Target Fling Enabled | Lets `Fling()` queue targets. Touching a player takes network ownership of them. |
 | Use NaN State Fling | Uses a NaN `MoveDirectionInternal` instead of a huge velocity to do the flinging. |
 | Root Jitter | Nudges the root 0.005 studs on Z every frame so identical CFrames aren't dropped before replicating. **Default off** — it visibly shakes the torso. Turn it on only if a game is dropping your root writes. |
+
+### Diagnostics
+
+The menu shows live numbers while running:
+
+```
+your rig    : R15
+rig source  : Built-in R6
+joints      : 6 driven, 8 pinned
+root drift  : 1.84 now, 2.03 max
+replicating : yes
+```
+
+**Root drift** is the distance between where the root was written last frame and
+where it actually is now. **~2 studs is the normal settle band.** Hundreds means
+something is winning against the writes — the readout turns red past 50.
+
+`joints: N driven` is how many of your real Motor6Ds are actually being posed.
+`pinned` are ones with no mapping, held at identity. On R15 with the built-in R6
+rig, expect **6 driven, 8 pinned** — elbows, wrists, knees, ankles and the waist
+have no R6 equivalent, so they stay at rest.
 
 **Rig Source** and **Init Mode** apply on the next reanimate. Everything else is
 read every frame and applies live.

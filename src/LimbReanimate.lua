@@ -8,7 +8,7 @@
 	Repo: https://github.com/HiddenProto/LimbReanimate
 ]]
 
-local SCRIPT_VERSION = "1.4.0"
+local SCRIPT_VERSION = "1.5.0"
 
 --==============================================================================
 -- 0. SINGLE INSTANCE GUARD
@@ -735,6 +735,17 @@ LR.FlingTargets = {}
 LR._TempNotFling = {}
 LR.Status = "IDLE"
 
+-- Measured, not guessed. Drift is the distance between where we wrote the root
+-- last frame and where it actually is now: a couple of studs is the normal
+-- settle band, hundreds means something is winning against our writes.
+LR.Diag = {
+	RigType = "?",
+	Mapped = 0,
+	Unmapped = 0,
+	Drift = 0,
+	MaxDrift = 0,
+}
+
 function LR.ShowHitboxes()
 	pcall(function()
 		Util.ShowPartHitbox(Player.Character.HumanoidRootPart)
@@ -1202,9 +1213,30 @@ function LR.Start()
 					-- "ROOT" means the REAL root part, the one in the void.
 					-- This single substitution is what makes the root joint
 					-- absorb the entire void offset.
-					if map.RPart0 == "ROOT" then p0 = RootPart end
+					local isRoot = map.RPart0 == "ROOT"
+					if isRoot then p0 = RootPart end
 					if p0 and p1 then
-						if map.Type == 1 then
+						--[[
+							The root entry is a PLACEMENT, not an angle
+							transfer, and must use the offset form even on R15.
+
+							Passing an offset makes the void translation cancel
+							exactly: Part1 = Part0 * (Part0^-1 * target).
+
+							The Type 2 form instead hands the engine a raw
+							Transform, so the result is conjugated by the real
+							joint's own C0:
+
+							    Part0 * C0 * Transform * C1^-1
+
+							Conjugation leaves a `t - R*t` term in the
+							translation. With `t` 70,000 studs out and any
+							rotation at all in C0 -- and R15's Root joint has
+							one -- that term is a six-figure position error, so
+							the body is flung somewhere unreachable and the
+							reanimate looks like it simply never happened.
+						]]
+						if isRoot or map.Type == 1 then
 							cf = p0.CFrame:ToObjectSpace(p1.CFrame)
 						elseif map.Type == 2 then
 							local offset = map.Offset or CFrame.identity
@@ -1223,6 +1255,9 @@ function LR.Start()
 	end
 
 	Reanimate.Starting = false
+
+	local lastRootTarget = nil
+	LR.Diag.MaxDrift = 0
 
 	while not Reanimate.Stopping do
 		RunService.PreSimulation:Wait()
@@ -1327,6 +1362,24 @@ function LR.Start()
 						flingtarget = nil
 					end
 				end
+
+				-- Drift against the PREVIOUS frame's target, measured before we
+				-- overwrite it. This is the signal that says whether the writes
+				-- are landing.
+				if lastRootTarget and not flingtarget then
+					local d = (RootPart.Position - lastRootTarget).Magnitude
+					LR.Diag.Drift = d
+					if d > LR.Diag.MaxDrift then LR.Diag.MaxDrift = d end
+				end
+				lastRootTarget = flingtarget and nil or rootcf.Position
+
+				local mapped = 0
+				for _, m in LimbMapping do
+					if m.Reference then mapped += 1 end
+				end
+				LR.Diag.Mapped = mapped
+				LR.Diag.Unmapped = #UnknownMotor6Ds
+				LR.Diag.RigType = (Humanoid.RigType == Enum.HumanoidRigType.R6) and "R6" or "R15"
 
 				UpdateTransforms(RC, RootPart, rootcf, rootvel, flingtarget, flingcf)
 
@@ -1877,6 +1930,17 @@ label(body,
 	11, COL.DIM, Enum.TextXAlignment.Center)
 
 separator(body)
+label(body, "DIAGNOSTICS", 13, COL.TEXT, Enum.TextXAlignment.Center)
+local diagLabel = label(body, "(not running)", 11, COL.DIM, Enum.TextXAlignment.Left)
+-- Five lines, not one: let it size itself.
+diagLabel.TextWrapped = false
+diagLabel.Size = UDim2.new(1, 0, 0, 0)
+diagLabel.AutomaticSize = Enum.AutomaticSize.Y
+label(body,
+	"Drift is how far the root moved off target between frames. ~2 studs is the normal settle band. Hundreds means something is winning against the writes.",
+	11, COL.DIM, Enum.TextXAlignment.Center)
+
+separator(body)
 label(body, "Rig Source and Init Mode apply on the NEXT reanimate. Everything else is live.", 11, COL.DIM, Enum.TextXAlignment.Center)
 label(body, "RightControl hides/shows this window.", 11, COL.DIM, Enum.TextXAlignment.Center)
 
@@ -1896,9 +1960,21 @@ local statusConn = RunService.Heartbeat:Connect(function()
 	if Reanimate.Running then
 		statusLabel.Text = "Running: Limbs (" .. LR.Status .. ")"
 		statusLabel.TextColor3 = COL.ON
+
+		local d = LR.Diag
+		diagLabel.Text = table.concat({
+			("your rig    : %s"):format(d.RigType),
+			("rig source  : %s"):format(Reanimate.IsOrigin and "Origin clone" or "Built-in R6"),
+			("joints      : %d driven, %d pinned"):format(d.Mapped, d.Unmapped),
+			("root drift  : %.2f now, %.2f max"):format(d.Drift, d.MaxDrift),
+			("replicating : %s"):format(App.HasHiddenProps and "yes" or "NO (local only)"),
+		}, "\n")
+		diagLabel.TextColor3 = (d.MaxDrift > 50) and COL.OFF or COL.DIM
 	else
 		statusLabel.Text = "Running: NONE"
 		statusLabel.TextColor3 = COL.DIM
+		diagLabel.Text = "(not running)"
+		diagLabel.TextColor3 = COL.DIM
 	end
 end)
 
