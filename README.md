@@ -29,10 +29,10 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/HiddenProto/LimbReani
 change under you. A new one is published with every update:
 
 ```lua
-loadstring(game:HttpGet("https://raw.githubusercontent.com/HiddenProto/LimbReanimate/v1.5.0/src/LimbReanimate.lua"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/HiddenProto/LimbReanimate/v1.6.0/src/LimbReanimate.lua"))()
 ```
 
-Current release: **v1.5.0**
+Current release: **v1.6.0**
 
 ---
 
@@ -54,6 +54,31 @@ Same options as Uhhhhhh's Limbs page.
 | Target Fling Enabled | Lets `Fling()` queue targets. Touching a player takes network ownership of them. |
 | Use NaN State Fling | Uses a NaN `MoveDirectionInternal` instead of a huge velocity to do the flinging. |
 | Root Jitter | Nudges the root 0.005 studs on Z every frame so identical CFrames aren't dropped before replicating. **Default off** — it visibly shakes the torso. Turn it on only if a game is dropping your root writes. |
+| **Hide Limbs** | Fold-out panel, one row per joint. Click to send that limb away; click again to bring it back. |
+
+### Hide Limbs
+
+A collapsible panel listing every joint the reanimate is actually driving,
+**built from your real rig** — so it shows R6 names on an R6 character, R15
+names on R15, and the full joint set in Origin Only. The head is just another
+row in it.
+
+Hiding a limb drives its joint to a hold position tens of thousands of studs
+away instead of to the rig. It is deliberately **not** a deletion:
+
+- nothing is destroyed and no joint is broken, so clicking again restores it
+  instantly and exactly;
+- the choice is keyed by joint name, so it survives a respawn and a
+  re-reanimate;
+- each limb gets its own deterministic hold spot, so the same limb always goes
+  to the same place and they never pile up.
+
+Hiding a parent takes its children with it — hiding `LeftUpperArm` on R15 takes
+the lower arm and hand too, because they hang off it.
+
+The **root entry is not listed**. Hiding it would take the entire body, which is
+already what `RootPart Mode → RootPart in very void` does, properly. There is no
+separate "hide HRP" switch for the same reason: that mode *is* it.
 
 ### Diagnostics
 

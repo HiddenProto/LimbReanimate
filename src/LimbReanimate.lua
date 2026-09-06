@@ -8,7 +8,7 @@
 	Repo: https://github.com/HiddenProto/LimbReanimate
 ]]
 
-local SCRIPT_VERSION = "1.5.0"
+local SCRIPT_VERSION = "1.6.0"
 
 --==============================================================================
 -- 0. SINGLE INSTANCE GUARD
@@ -735,6 +735,23 @@ LR.FlingTargets = {}
 LR._TempNotFling = {}
 LR.Status = "IDLE"
 
+--[[
+	Hidden limbs.
+
+	Keyed by the joint's Part1 name, so the choice survives a respawn and a
+	re-reanimate. A hidden limb is driven to a far-off hold position instead of
+	to the rig -- it is never deleted and the joint is never broken, so it comes
+	straight back the moment you un-hide it. Server-side deletion would not be
+	reversible and is not worth the trade.
+
+	The root entry is deliberately not listed: hiding it would take the whole
+	body, which is what RootPart Mode already does properly.
+]]
+LR.HiddenLimbs = {}
+LR.LimbList = {}
+LR.LimbListVersion = 0
+LR._LimbSig = nil
+
 -- Measured, not guessed. Drift is the distance between where we wrote the root
 -- last frame and where it actually is now: a couple of studs is the normal
 -- settle band, hundreds means something is winning against our writes.
@@ -845,6 +862,22 @@ function LR.Start()
 		math.random(-500, -100) + FallenPartsDestroyHeight,
 		math.random(-2048, 2048)
 	)
+	-- Where hidden limbs are parked. Its own spot, well away from the root, so
+	-- a hidden limb never lands on the body it came off.
+	local limbholdposition = Vector3.new(
+		math.random(-65536, 65536),
+		math.random(-70000, -60000),
+		math.random(-65536, 65536)
+	)
+	-- Spread them apart deterministically, so the same limb always goes to the
+	-- same place and they do not pile up on one point.
+	local function HoldPositionFor(name)
+		local n = 0
+		for i = 1, #name do
+			n += string.byte(name, i)
+		end
+		return limbholdposition + Vector3.new((n % 16) * 8, 0, (n // 16 % 16) * 8)
+	end
 
 	local InitCFrame = nil
 	if Player.Character then
@@ -1206,6 +1239,15 @@ function LR.Start()
 			if v then
 				if flingtarget then
 					Util.SetMotor6DTransform(v, CFrame.identity)
+				elseif map.RPart0 ~= "ROOT" and LR.HiddenLimbs[map.Part1] then
+					-- Hidden: drive it to the hold position instead of the rig.
+					-- Same offset form as everything else, so it lands exactly
+					-- there, and nothing about the joint is destroyed.
+					local p0 = RC:FindFirstChild(map.RPart0)
+					if p0 then
+						Util.SetMotor6DOffset(v,
+							p0.CFrame:ToObjectSpace(CFrame.new(HoldPositionFor(map.Part1))))
+					end
 				else
 					local cf = CFrame.identity
 					local p0 = RC:FindFirstChild(map.RPart0)
@@ -1373,9 +1415,31 @@ function LR.Start()
 				end
 				lastRootTarget = flingtarget and nil or rootcf.Position
 
+				-- Count the driven joints and, in the same pass, notice when the
+				-- set of them changes so the hide panel can rebuild itself from
+				-- the real rig instead of a hardcoded list.
 				local mapped = 0
+				local sig = table.create(#LimbMapping)
 				for _, m in LimbMapping do
-					if m.Reference then mapped += 1 end
+					if m.Reference then
+						mapped += 1
+						table.insert(sig, m.Part1)
+					end
+				end
+				local sigstr = table.concat(sig, ";")
+				if sigstr ~= LR._LimbSig then
+					LR._LimbSig = sigstr
+					local list = {}
+					for _, m in LimbMapping do
+						-- The root entry is excluded: hiding it would take the
+						-- whole body, which is RootPart Mode's job.
+						if m.Reference and m.RPart0 ~= "ROOT" then
+							table.insert(list, m.Part1)
+						end
+					end
+					table.sort(list)
+					LR.LimbList = list
+					LR.LimbListVersion += 1
 				end
 				LR.Diag.Mapped = mapped
 				LR.Diag.Unmapped = #UnknownMotor6Ds
@@ -1667,6 +1731,59 @@ local function dropdown(parent, text, options, defaultIndex, cb)
 	return holder, function() return index end
 end
 
+-- A collapsible section. Unlike dropdown() this does not know how many rows it
+-- will hold, so it sizes itself from its children.
+local function foldout(parent, text)
+	local open = false
+
+	local holder = Instance.new("Frame")
+	holder.BackgroundTransparency = 1
+	holder.BorderSizePixel = 0
+	holder.Size = UDim2.new(1, 0, 0, 0)
+	holder.AutomaticSize = Enum.AutomaticSize.Y
+	holder.Parent = parent
+
+	local list = Instance.new("UIListLayout")
+	list.SortOrder = Enum.SortOrder.LayoutOrder
+	list.Padding = UDim.new(0, 2)
+	list.Parent = holder
+
+	local head = baseButton(holder)
+	head.LayoutOrder = 0
+	head.TextXAlignment = Enum.TextXAlignment.Left
+	local hp = Instance.new("UIPadding")
+	hp.PaddingLeft = UDim.new(0, 6)
+	hp.PaddingRight = UDim.new(0, 6)
+	hp.Parent = head
+
+	local sect = Instance.new("Frame")
+	sect.BackgroundTransparency = 1
+	sect.BorderSizePixel = 0
+	sect.LayoutOrder = 1
+	sect.Size = UDim2.new(1, 0, 0, 0)
+	sect.AutomaticSize = Enum.AutomaticSize.Y
+	sect.Visible = false
+	sect.Parent = holder
+
+	local blist = Instance.new("UIListLayout")
+	blist.SortOrder = Enum.SortOrder.LayoutOrder
+	blist.Padding = UDim.new(0, 1)
+	blist.Parent = sect
+
+	local function paint()
+		head.Text = (open and "v  " or ">  ") .. text
+	end
+	paint()
+
+	head.Activated:Connect(function()
+		open = not open
+		sect.Visible = open
+		paint()
+	end)
+
+	return sect
+end
+
 --------------------------------------------------------------------------------
 -- Window
 --------------------------------------------------------------------------------
@@ -1930,6 +2047,63 @@ label(body,
 	11, COL.DIM, Enum.TextXAlignment.Center)
 
 separator(body)
+local limbPanel = foldout(body, "Hide Limbs")
+label(body,
+	"Sends a limb to a hold spot far away instead of to the rig. Nothing is deleted and no joint is broken, so clicking again brings it straight back. The list is built from your real rig once you reanimate.",
+	11, COL.DIM, Enum.TextXAlignment.Center)
+
+local limbPanelVersion = -1
+local function rebuildLimbRows()
+	for _, c in limbPanel:GetChildren() do
+		if c:IsA("GuiObject") then
+			c:Destroy()
+		end
+	end
+
+	local list = LR.LimbList
+	if not list or #list == 0 then
+		label(limbPanel, "  (reanimate to list your joints)", 11, COL.DIM, Enum.TextXAlignment.Left)
+		return
+	end
+
+	for i, name in list do
+		local b = baseButton(limbPanel, 21)
+		b.LayoutOrder = i
+		b.TextSize = 12
+		b.TextXAlignment = Enum.TextXAlignment.Left
+		b.Text = name
+
+		local pad = Instance.new("UIPadding")
+		pad.PaddingLeft = UDim.new(0, 6)
+		pad.PaddingRight = UDim.new(0, 6)
+		pad.Parent = b
+
+		local ind = Instance.new("TextLabel")
+		ind.BackgroundTransparency = 1
+		ind.AnchorPoint = Vector2.new(1, 0.5)
+		ind.Position = UDim2.new(1, 0, 0.5, 0)
+		ind.Size = UDim2.new(0, 62, 1, 0)
+		ind.Font = FONT
+		ind.TextSize = 12
+		ind.TextXAlignment = Enum.TextXAlignment.Right
+		ind.Parent = b
+
+		local function paint()
+			local hidden = LR.HiddenLimbs[name]
+			ind.Text = hidden and "[HIDDEN]" or "[SHOWN]"
+			ind.TextColor3 = hidden and COL.OFF or COL.ON
+		end
+		paint()
+
+		b.Activated:Connect(function()
+			LR.HiddenLimbs[name] = (not LR.HiddenLimbs[name]) or nil
+			paint()
+		end)
+	end
+end
+rebuildLimbRows()
+
+separator(body)
 label(body, "DIAGNOSTICS", 13, COL.TEXT, Enum.TextXAlignment.Center)
 local diagLabel = label(body, "(not running)", 11, COL.DIM, Enum.TextXAlignment.Left)
 -- Five lines, not one: let it size itself.
@@ -1957,6 +2131,14 @@ end
 
 local statusConn = RunService.Heartbeat:Connect(function()
 	if not statusLabel.Parent then return end
+
+	-- The joint set is only known once a reanimate has discovered it, and it
+	-- changes with rig source and rig type, so the panel follows it.
+	if LR.LimbListVersion ~= limbPanelVersion then
+		limbPanelVersion = LR.LimbListVersion
+		rebuildLimbRows()
+	end
+
 	if Reanimate.Running then
 		statusLabel.Text = "Running: Limbs (" .. LR.Status .. ")"
 		statusLabel.TextColor3 = COL.ON
