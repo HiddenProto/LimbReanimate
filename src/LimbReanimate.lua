@@ -8,7 +8,7 @@
 	Repo: https://github.com/HiddenProto/LimbReanimate
 ]]
 
-local SCRIPT_VERSION = "1.10.0"
+local SCRIPT_VERSION = "1.11.0"
 
 --==============================================================================
 -- 0. SINGLE INSTANCE GUARD
@@ -451,6 +451,87 @@ end
 	Cheaper and far less fragile than cloning -- there is no Archivable problem
 	and nothing to strip afterwards.
 ]]
+--[[
+	Standard joint layouts, for rebuilding a skeleton when the real body has no
+	Motor6Ds left to mirror.
+
+	R15 offsets are NOT hardcoded: every R15 part carries `<Joint>RigAttachment`
+	attachments, and a joint's C0/C1 are exactly those two attachment CFrames.
+	They survive when the joints do not, so the rebuilt skeleton has the real
+	avatar's proportions rather than a guess.
+
+	R6 has no such guarantee, so it uses the classic constants.
+]]
+local R15_JOINTS = {
+	{ "Root", "HumanoidRootPart", "LowerTorso" },
+	{ "Waist", "LowerTorso", "UpperTorso" },
+	{ "Neck", "UpperTorso", "Head" },
+	{ "LeftShoulder", "UpperTorso", "LeftUpperArm" },
+	{ "LeftElbow", "LeftUpperArm", "LeftLowerArm" },
+	{ "LeftWrist", "LeftLowerArm", "LeftHand" },
+	{ "RightShoulder", "UpperTorso", "RightUpperArm" },
+	{ "RightElbow", "RightUpperArm", "RightLowerArm" },
+	{ "RightWrist", "RightLowerArm", "RightHand" },
+	{ "LeftHip", "LowerTorso", "LeftUpperLeg" },
+	{ "LeftKnee", "LeftUpperLeg", "LeftLowerLeg" },
+	{ "LeftAnkle", "LeftLowerLeg", "LeftFoot" },
+	{ "RightHip", "LowerTorso", "RightUpperLeg" },
+	{ "RightKnee", "RightUpperLeg", "RightLowerLeg" },
+	{ "RightAnkle", "RightLowerLeg", "RightFoot" },
+}
+
+local R6_JOINTS = {
+	{ "RootJoint", "HumanoidRootPart", "Torso",
+		CFrame.new(0, 0, 0, -1, 0, 0, 0, 0, 1, 0, 1, 0),
+		CFrame.new(0, 0, 0, -1, 0, 0, 0, 0, 1, 0, 1, 0) },
+	{ "Neck", "Torso", "Head",
+		CFrame.new(0, 1, 0, -1, 0, 0, 0, 0, 1, 0, 1, 0),
+		CFrame.new(0, -0.5, 0, -1, 0, 0, 0, 0, 1, 0, 1, 0) },
+	{ "Left Shoulder", "Torso", "Left Arm",
+		CFrame.new(-1, 0.5, 0, 0, 0, -1, 0, 1, 0, 1, 0, 0),
+		CFrame.new(0.5, 0.5, 0, 0, 0, -1, 0, 1, 0, 1, 0, 0) },
+	{ "Right Shoulder", "Torso", "Right Arm",
+		CFrame.new(1, 0.5, 0, 0, 0, 1, 0, 1, 0, -1, 0, 0),
+		CFrame.new(-0.5, 0.5, 0, 0, 0, 1, 0, 1, 0, -1, 0, 0) },
+	{ "Left Hip", "Torso", "Left Leg",
+		CFrame.new(-1, -1, 0, 0, 0, -1, 0, 1, 0, 1, 0, 0),
+		CFrame.new(-0.5, 1, 0, 0, 0, -1, 0, 1, 0, 1, 0, 0) },
+	{ "Right Hip", "Torso", "Right Leg",
+		CFrame.new(1, -1, 0, 0, 0, 1, 0, 1, 0, -1, 0, 0),
+		CFrame.new(0.5, 1, 0, 0, 0, 1, 0, 1, 0, -1, 0, 0) },
+}
+
+local function SynthesizeJoints(src, mirror, isR15)
+	local layout = isR15 and R15_JOINTS or R6_JOINTS
+	local made = 0
+	for _, j in layout do
+		local name, p0n, p1n, fc0, fc1 = j[1], j[2], j[3], j[4], j[5]
+		local rp0, rp1 = src:FindFirstChild(p0n), src:FindFirstChild(p1n)
+		if rp0 and rp1 and rp0:IsA("BasePart") and rp1:IsA("BasePart") then
+			local c0, c1 = fc0, fc1
+			if isR15 then
+				local a0 = rp0:FindFirstChild(name .. "RigAttachment")
+				local a1 = rp1:FindFirstChild(name .. "RigAttachment")
+				if a0 and a1 and a0:IsA("Attachment") and a1:IsA("Attachment") then
+					c0, c1 = a0.CFrame, a1.CFrame
+				end
+			end
+			if c0 and c1 then
+				local m = Instance.new("Motor6D")
+				m.Name = name
+				m.Part0 = mirror(rp0)
+				m.Part1 = mirror(rp1)
+				m.C0 = c0
+				m.C1 = c1
+				m.MaxVelocity = 0
+				m.Parent = m.Part0
+				made += 1
+			end
+		end
+	end
+	return made
+end
+
 local function BuildSkeletonRig()
 	local src = Player.Character
 	local srcHum = src and src:FindFirstChildOfClass("Humanoid")
@@ -518,9 +599,19 @@ local function BuildSkeletonRig()
 			joints += 1
 		end
 	end
+	--[[
+		Nothing to mirror means the real body's joints are gone. Rebuild them
+		from the standard layout instead -- the rig needs joints even when your
+		body has none, because a jointless rig can never be animated and Loose
+		Parts would then copy a frozen pose onto you forever.
+	]]
+	if joints == 0 then
+		joints = SynthesizeJoints(src, mirror, srcHum.RigType == Enum.HumanoidRigType.R15)
+	end
+
 	if joints == 0 then
 		char:Destroy()
-		return nil, "no Motor6D joints to mirror"
+		return nil, "no joints to mirror and none could be rebuilt"
 	end
 
 	char.PrimaryPart = made[srcRoot.Name]
@@ -579,6 +670,19 @@ local DEFAULT_R6_ANIMS = {
 	sit   = "rbxassetid://178130996",
 }
 
+-- Stock R15 set, for when there is no Animate script to harvest from. R6 ids
+-- target R6 joint names and would move an R15 rig not at all, so the fallback
+-- has to be picked by rig type.
+local DEFAULT_R15_ANIMS = {
+	idle  = "rbxassetid://507766666",
+	walk  = "rbxassetid://507777826",
+	run   = "rbxassetid://507767714",
+	jump  = "rbxassetid://507765000",
+	fall  = "rbxassetid://507767968",
+	climb = "rbxassetid://507765644",
+	sit   = "rbxassetid://2506281703",
+}
+
 local ANIM_SLOTS = { "idle", "walk", "run", "jump", "fall", "climb", "sit" }
 
 -- Reads the animation ids out of the character's Animate script, so an owned
@@ -622,7 +726,9 @@ local function SetupRigAnimation(RC, hum, root)
 	-- exactly like a broken reanimate.
 	local ids = Reanimate.AnimIds
 	if not ids then
-		ids = (hum.RigType == Enum.HumanoidRigType.R6) and DEFAULT_R6_ANIMS or {}
+		ids = (hum.RigType == Enum.HumanoidRigType.R15)
+			and DEFAULT_R15_ANIMS
+			or DEFAULT_R6_ANIMS
 	end
 	local tracks = {}
 	for slot, id in ids do
@@ -1886,7 +1992,10 @@ end
 local function label(parent, text, size, color, align)
 	local l = Instance.new("TextLabel")
 	l.BackgroundTransparency = 1
-	l.Size = UDim2.new(1, 0, 0, size + 8)
+	-- Wrapped text needs to size itself. A fixed one-line height silently clips
+	-- every explainer in this menu to its first line.
+	l.Size = UDim2.new(1, 0, 0, 0)
+	l.AutomaticSize = Enum.AutomaticSize.Y
 	l.Font = FONT
 	l.Text = text
 	l.TextSize = size

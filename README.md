@@ -29,10 +29,10 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/HiddenProto/LimbReani
 change under you. A new one is published with every update:
 
 ```lua
-loadstring(game:HttpGet("https://raw.githubusercontent.com/HiddenProto/LimbReanimate/v1.10.0/src/LimbReanimate.lua"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/HiddenProto/LimbReanimate/v1.11.0/src/LimbReanimate.lua"))()
 ```
 
-Current release: **v1.10.0**
+Current release: **v1.11.0**
 
 ---
 
@@ -134,6 +134,16 @@ Some games hand back a live, full-health character with every joint already
 gone. Nothing can drive joints that do not exist — but the parts are still
 yours, and **part CFrames replicate for parts you own**, so writing them
 directly drives your limbs for everyone with no joints required.
+
+For this to be *driveable* rather than frozen, the rig still needs joints of its
+own — so when your body has none, the skeleton is **rebuilt** from the standard
+layout rather than mirrored. On R15 the offsets come from your avatar's own
+`<Joint>RigAttachment` attachments, which survive when the joints do not, so the
+rebuilt skeleton has your real proportions rather than a guess. The rig then
+animates normally and your loose parts follow it.
+
+This is why Origin Only is the wrong choice on a jointless body: a clone of a
+body with no joints has no joints either, and can never animate. Use Built-in.
 
 Matching is by name and non-recursive, so accessory `Handle`s are left alone —
 they are still welded to their limb and follow it for free. Hide Limbs works in
