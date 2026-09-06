@@ -8,7 +8,7 @@
 	Repo: https://github.com/HiddenProto/LimbReanimate
 ]]
 
-local SCRIPT_VERSION = "1.3.0"
+local SCRIPT_VERSION = "1.4.0"
 
 --==============================================================================
 -- 0. SINGLE INSTANCE GUARD
@@ -718,7 +718,9 @@ LR.Velocity = 0
 -- 0 = No Velocity   1 = Follow Character   2 = Fling-like
 
 LR.InitMode = 2
--- 0 = Reset Character      1 = CDSB + Reset      2 = CDSB + SSE + Kill
+-- 0 = Reset Character   1 = CDSB + Reset   2 = CDSB + SSE + Kill
+-- 3 = No Respawn -- never kills. Takes animation authority from the live body
+--     and gives it back on Deanimate. Handled outside DoInit entirely.
 
 LR.ReplicateFPS10 = false   -- "Show me how I look!" (throttle joint writes to 10/s)
 LR.FlingEnabled   = false   -- Target Fling Enabled
@@ -775,6 +777,8 @@ end
 	       stopped the server respawning you at all. Patched on current clients;
 	       kept for parity and only attempted if the executor exposes
 	       replicatesignal.
+
+	Mode 3 (No Respawn) never reaches here -- there is nothing to kill.
 ]]
 local function DoInit(humanoid)
 	if LR.InitMode >= 1 and Env.replicatesignal then
@@ -797,6 +801,27 @@ function LR.Start()
 	Reanimate.ActiveRigSource = Reanimate.RigSource
 	local OriginMode = Reanimate.ActiveRigSource == 1
 
+	-- Origin mode exists to hand the rig to your own scripts, so the built-in
+	-- driver starts out of the way. The Animator is still there for you to load
+	-- onto -- this switches off our driver, not the rig's ability to animate.
+	if OriginMode then
+		Reanimate.AnimateRig = false
+		if Reanimate.SyncAnimateToggle then
+			Reanimate.SyncAnimateToggle(false)
+		end
+	end
+
+	-- Reanimating in place: no kill, no respawn, and Deanimate restores the
+	-- character you already have instead of throwing it away.
+	local NoRespawn = LR.InitMode == 3
+
+	-- Everything that has to be unhooked if we restore in place. Without this
+	-- the CanCollide and LocalScript forcers keep running on a character we no
+	-- longer own, and it stays broken after Deanimate.
+	local Conns = {}
+	local SavedCollide = {}
+	local SavedScripts = {}
+
 	-- Rolled ONCE per session, not per frame, and randomised in X/Z so two
 	-- players never park their roots in the same spot.
 	local rootposition = Vector3.new(
@@ -818,7 +843,9 @@ function LR.Start()
 		local h = Player.Character:FindFirstChildOfClass("Humanoid")
 		if h and h.RootPart then
 			InitCFrame = h.RootPart.CFrame
-			DoInit(h)
+			if not NoRespawn then
+				DoInit(h)
+			end
 		end
 	end
 
@@ -866,10 +893,11 @@ function LR.Start()
 		if v:IsA("BasePart") then
 			if not table.find(BaseParts, v) then
 				table.insert(BaseParts, v)
+				if SavedCollide[v] == nil then SavedCollide[v] = v.CanCollide end
 				v.CanCollide = false
-				v:GetPropertyChangedSignal("CanCollide"):Connect(function()
+				table.insert(Conns, v:GetPropertyChangedSignal("CanCollide"):Connect(function()
 					if v.CanCollide then v.CanCollide = false end
-				end)
+				end))
 			end
 		elseif v:IsA("Motor6D") then
 			repeat task.wait() until (not v:IsDescendantOf(Workspace)) or (v.Part0 and v.Part1)
@@ -904,13 +932,14 @@ function LR.Start()
 			-- transform we write, one frame at a time, and win.
 			task.defer(v.Destroy, v)
 		elseif v:IsA("LocalScript") and v.Parent == Player.Character then
+			if SavedScripts[v] == nil then SavedScripts[v] = v.Enabled end
 			v.Enabled = false
-			v:GetPropertyChangedSignal("Enabled"):Connect(function()
+			table.insert(Conns, v:GetPropertyChangedSignal("Enabled"):Connect(function()
 				if v.Enabled then v.Enabled = false end
-			end)
-			v:GetPropertyChangedSignal("Disabled"):Connect(function()
+			end))
+			table.insert(Conns, v:GetPropertyChangedSignal("Disabled"):Connect(function()
 				if not v.Disabled then v.Disabled = true end
-			end)
+			end))
 		elseif v:IsA("Tool") and v.Parent == Player.Character then
 			if not FakeTools[v] then
 				FakeTools[v] = true
@@ -959,14 +988,19 @@ function LR.Start()
 	end
 
 	local lastspawn = 0
-	local CharConn = Player.CharacterAdded:Connect(function(character)
-		-- The engine snaps the camera to the new character. Put it back before
-		-- the frame is drawn so respawns are not visible as a camera jolt.
-		local camcfr = Camera.CFrame
-		RunService.PreRender:Once(function()
-			RunService.PreAnimation:Wait()
-			Camera.CFrame = camcfr
-		end)
+
+	-- Takes animation authority away from a character. Used on the respawned
+	-- body in the normal flow, and on the LIVE body in no-respawn mode.
+	local function AdoptCharacter(character, fromRespawn)
+		if fromRespawn then
+			-- The engine snaps the camera to the new character. Put it back
+			-- before the frame is drawn so respawns are not a camera jolt.
+			local camcfr = Camera.CFrame
+			RunService.PreRender:Once(function()
+				RunService.PreAnimation:Wait()
+				Camera.CFrame = camcfr
+			end)
+		end
 		lastspawn = os.clock()
 		table.clear(BaseParts)
 		table.clear(UnknownMotor6Ds)
@@ -978,7 +1012,7 @@ function LR.Start()
 				map.Reference = nil
 			end
 		end
-		character.DescendantAdded:Connect(CharOnDesc)
+		table.insert(Conns, character.DescendantAdded:Connect(CharOnDesc))
 		for _, v in character:GetDescendants() do
 			task.spawn(CharOnDesc, v)
 		end
@@ -988,22 +1022,105 @@ function LR.Start()
 			if anim then anim:Destroy() end
 		end
 		local animate = character:FindFirstChild("Animate")
-		local deadline = os.clock() + 5
-		while not animate and os.clock() < deadline do
-			character.ChildAdded:Wait()
-			animate = character:FindFirstChild("Animate")
+		if fromRespawn then
+			-- A fresh character may not have it yet.
+			local deadline = os.clock() + 5
+			while not animate and os.clock() < deadline do
+				character.ChildAdded:Wait()
+				animate = character:FindFirstChild("Animate")
+			end
 		end
 		if animate then
 			Reanimate.AnimIds = HarvestAnimIds(character, not OriginMode) or Reanimate.AnimIds
-			animate:Destroy()
+			-- In no-respawn mode it is only disabled (by the LocalScript branch
+			-- above) so it can be switched back on when we hand the body back.
+			if not NoRespawn then
+				animate:Destroy()
+			end
 		end
+	end
+
+	local CharConn = Player.CharacterAdded:Connect(function(character)
+		AdoptCharacter(character, true)
 	end)
 
-	-- Bounded wait for the respawn. An unbounded CharacterAdded:Wait() strands
-	-- the whole coroutine in games where the kill does not take, and the
-	-- Deanimate button then has nothing to stop.
-	LR.Status = "WAITING FOR RESPAWN"
-	do
+	-- Undoes AdoptCharacter, for no-respawn mode. Every joint back to rest,
+	-- the body back out of the void, every hook unhooked, animation authority
+	-- handed back to the game.
+	local function RestoreCharacter()
+		for _, c in Conns do
+			pcall(function() c:Disconnect() end)
+		end
+		table.clear(Conns)
+
+		for _, v in UnknownMotor6Ds do
+			if v.Parent then
+				Util.SetMotor6DTransform(v, CFrame.identity)
+			end
+		end
+		for _, map in LimbMapping do
+			if map.Reference and map.Reference.Parent then
+				Util.SetMotor6DTransform(map.Reference, CFrame.identity)
+			end
+		end
+
+		local character = Player.Character
+		local RC = Reanimate.Character
+		if character then
+			local hum = character:FindFirstChildOfClass("Humanoid")
+			local root = hum and hum.RootPart
+			if root then
+				SetHidden(root, "PhysicsRepRootPart", nil)
+				-- Land where the rig was standing, not 70,000 studs down.
+				local rigRoot = RC and RC:FindFirstChild("HumanoidRootPart")
+				if rigRoot then
+					root.CFrame = rigRoot.CFrame
+				end
+				root.AssemblyLinearVelocity = Vector3.zero
+				root.AssemblyAngularVelocity = Vector3.zero
+			end
+			if hum then
+				hum.AutoRotate = true
+				-- Give animation authority back.
+				if not hum:FindFirstChildOfClass("Animator") then
+					Util.Instance("Animator", hum)
+				end
+			end
+		end
+
+		for part, collide in SavedCollide do
+			if part.Parent then
+				pcall(function() part.CanCollide = collide end)
+			end
+		end
+		table.clear(SavedCollide)
+
+		for scr, enabled in SavedScripts do
+			if scr.Parent then
+				pcall(function() scr.Enabled = enabled end)
+			end
+		end
+		table.clear(SavedScripts)
+	end
+
+	if NoRespawn then
+		-- Nothing died, so there is nothing to wait for. Take the body we
+		-- already have.
+		local character = Player.Character
+		if not character then
+			CharConn:Disconnect()
+			Reanimate.Starting = false
+			Reanimate.Stopping = false
+			LR.Status = "NO CHARACTER"
+			return
+		end
+		LR.Status = "ADOPTING IN PLACE"
+		AdoptCharacter(character, false)
+	else
+		-- Bounded wait for the respawn. An unbounded CharacterAdded:Wait()
+		-- strands the whole coroutine in games where the kill does not take,
+		-- and the Deanimate button then has nothing to stop.
+		LR.Status = "WAITING FOR RESPAWN"
 		local spawned = false
 		local waitConn = Player.CharacterAdded:Connect(function() spawned = true end)
 		local deadline = os.clock() + 15
@@ -1241,13 +1358,20 @@ function LR.Start()
 	LR.Status = "STOPPING"
 	CharConn:Disconnect()
 
-	-- Leaving the loop with the real character still puppeted would strand you
-	-- in the void, so kill it once more and let the server respawn you clean.
-	if Player.Character then
-		local h = Player.Character:FindFirstChildOfClass("Humanoid")
-		if h then
-			h:SetStateEnabled(Enum.HumanoidStateType.Dead, true)
-			h:ChangeState(Enum.HumanoidStateType.Dead)
+	if NoRespawn then
+		-- Hand the same body back instead of throwing it away.
+		LR.Status = "RESTORING"
+		pcall(RestoreCharacter)
+	else
+		-- Leaving the loop with the real character still puppeted would strand
+		-- you in the void, so kill it once more and let the server respawn you
+		-- clean.
+		if Player.Character then
+			local h = Player.Character:FindFirstChildOfClass("Humanoid")
+			if h then
+				h:SetStateEnabled(Enum.HumanoidStateType.Dead, true)
+				h:ChangeState(Enum.HumanoidStateType.Dead)
+			end
 		end
 	end
 
@@ -1379,7 +1503,12 @@ local function toggle(parent, text, default, cb)
 		if not ok then warn("[LimbReanimate] " .. tostring(err)) end
 	end)
 
-	return b, function() return state end
+	-- Third return is a setter, so code can flip the value AND the widget
+	-- together. Setting one without the other leaves the menu lying.
+	return b, function() return state end, function(v)
+		state = v and true or false
+		paint()
+	end
 end
 
 local function dropdown(parent, text, options, defaultIndex, cb)
@@ -1723,9 +1852,17 @@ dropdown(body, "Init Mode", {
 	"Reset Character",
 	"CDSB + Reset",
 	"CDSB + SSE + Kill",
+	"No Respawn (in-place)",
 }, LR.InitMode + 1, function(i) LR.InitMode = i - 1 end)
+label(body,
+	"No Respawn never kills you: it takes animation authority from the body you already have, and Deanimate hands that same body back instead of respawning you.",
+	11, COL.DIM, Enum.TextXAlignment.Center)
 
-toggle(body, "Animate Fake Rig", Reanimate.AnimateRig, function(v) Reanimate.AnimateRig = v end)
+do
+	local _, _, setAnim = toggle(body, "Animate Fake Rig", Reanimate.AnimateRig,
+		function(v) Reanimate.AnimateRig = v end)
+	Reanimate.SyncAnimateToggle = setAnim
+end
 label(body,
 	"Plays your own character animations on the rig, which is what your real limbs then copy. Turn OFF to hand the rig's Animator to your own script instead.",
 	11, COL.DIM, Enum.TextXAlignment.Center)

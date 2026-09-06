@@ -29,10 +29,10 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/HiddenProto/LimbReani
 change under you. A new one is published with every update:
 
 ```lua
-loadstring(game:HttpGet("https://raw.githubusercontent.com/HiddenProto/LimbReanimate/v1.3.0/src/LimbReanimate.lua"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/HiddenProto/LimbReanimate/v1.4.0/src/LimbReanimate.lua"))()
 ```
 
-Current release: **v1.3.0**
+Current release: **v1.4.0**
 
 ---
 
@@ -42,14 +42,14 @@ Same options as Uhhhhhh's Limbs page.
 
 | Control | What it does |
 |---|---|
-| `* Reanimate *` / `* Deanimate *` | Start / stop. Deanimate kills you once more so the server respawns you clean. |
+| `* Reanimate *` / `* Deanimate *` | Start / stop. Deanimate kills you once more so the server respawns you clean — except in **No Respawn**, where it restores the body you already have. |
 | Show Reanimate Hitboxes | Wireframes your real root part for 5 seconds. |
 | Refresh Reanimate Character | Rebuilds the fake rig in place without deanimating. |
 | **RootPart Mode** | Where the real root part gets parked. 5 options — see below. |
 | **RootPart Velocity** | What velocity the parked root is given each frame. |
-| **Init Mode** | How the character is killed to enter the loose-limb state. |
+| **Init Mode** | How the character enters the reanimated state — including **No Respawn**, which never kills you. |
 | **Rig Source** | `Built-in R6` (default) or `Origin Only` — see below. |
-| **Animate Fake Rig** | Plays your own character animations on the rig, which your real limbs then copy. On by default, both rig sources. Turn it off to hand the rig's Animator to your own script. |
+| **Animate Fake Rig** | Plays your own character animations on the rig, which your real limbs then copy. On for Built-in R6; **forced off when Origin Only starts**, since that mode exists to hand the rig to your own script. The Animator is there either way. |
 | Show me how I look! | Throttles joint writes to 10/s, so you see roughly what other players receive. |
 | Target Fling Enabled | Lets `Fling()` queue targets. Touching a player takes network ownership of them. |
 | Use NaN State Fling | Uses a NaN `MoveDirectionInternal` instead of a huge velocity to do the flinging. |
@@ -67,6 +67,7 @@ read every frame and applies live.
 | Part & joint names | always R6 (`Torso`, `Left Arm`) | **your real ones**, R6 or R15 |
 | Proportions | generic R6 | your actual avatar's |
 | Animator | yes | yes |
+| Built-in driver | on | **off** — the rig is yours to drive |
 | Animation ids | R6 only, stock fallback | **your own**, whatever your rig type |
 
 Origin Only makes the rig **pass for a real character**. Real part names, real
@@ -88,7 +89,8 @@ written there is gone before it can replicate.
 local LR  = _G.LimbReanimate
 local rig = LR.Reanimate.Character   -- the Model to drive
 
--- Hand the rig over: stops the built-in driver fighting you for the Animator.
+-- Origin Only already did this for you when it started. On the built-in R6
+-- rig you have to turn the driver off yourself or it fights you.
 LR.Reanimate.AnimateRig = false
 
 -- Play your own animation on it, exactly like a real character.
@@ -121,9 +123,44 @@ Also exposed: `LR.Reanimate.IsOrigin`, `.Animator`, `.Tracks`
 | Reset Character | `Humanoid.Health = 0`, then the Dead state change. |
 | CDSB + Reset | Fires `Player.ConnectDiedSignalBackend` first, then the above. |
 | CDSB + SSE + Kill | CDSB, then `SetStateEnabled(Dead, true)` + `ChangeState(Dead)`. Default. |
+| **No Respawn (in-place)** | Never kills you. See below. |
 
 `CDSB` is patched on current clients and is only attempted at all if your
 executor exposes `replicatesignal`. It is kept for parity with the original.
+
+### No Respawn
+
+The kill was never the mechanism. The mechanism is **animation authority** — the
+`Animator` is what overwrites your joints, and breaking joints is incidental,
+because this design drives `Motor6D.Transform` and keeps the assembly intact
+either way. So the kill can be skipped: take authority from the body you already
+have, and hand it back when you are done.
+
+Reanimating in place:
+
+1. No `ChangeState(Dead)`, no waiting on `CharacterAdded`.
+2. Destroy the live character's `Animator`; **disable** its `Animate` script
+   rather than destroying it, so it can be switched back on.
+3. Everything else is identical — joints mapped, root parked, transforms driven.
+
+Deanimating restores instead of killing:
+
+1. Every joint it touched goes back to `CFrame.identity`.
+2. The body comes back out of the void to wherever the rig was standing.
+3. Every hook is disconnected — the `CanCollide` and `LocalScript` forcers, and
+   the character's `DescendantAdded` watcher.
+4. Original `CanCollide` values and `LocalScript` enabled states are put back
+   from what was recorded on the way in.
+5. A fresh `Animator` is created and `AutoRotate` restored, so the game animates
+   you again.
+
+You end up standing where you were, alive, in a character the game controls
+normally — no death, no respawn, no lost tools or state.
+
+The trade-off: your body was never actually loosened, so anything that depends
+on the server having broken your joints will not behave the same. And any game
+script that re-creates the `Animator` will take you straight back, with no
+respawn to clear it.
 
 ---
 
