@@ -8,7 +8,7 @@
 	Repo: https://github.com/HiddenProto/LimbReanimate
 ]]
 
-local SCRIPT_VERSION = "1.8.2"
+local SCRIPT_VERSION = "1.9.0"
 
 --==============================================================================
 -- 0. SINGLE INSTANCE GUARD
@@ -877,7 +877,7 @@ LR.Velocity = 0
 
 LR.InitMode = 2
 -- 0 = Reset Character   1 = CDSB + Reset   2 = CDSB + SSE + Kill
--- 3 = No Respawn -- never kills. Takes animation authority from the live body
+-- 3 = No Kill -- never kills. Takes animation authority from the live body
 --     and gives it back on Deanimate. Handled outside DoInit entirely.
 
 LR.ReplicateFPS10 = false   -- "Show me how I look!" (throttle joint writes to 10/s)
@@ -926,6 +926,10 @@ LR.Diag = {
 	BodyState = "?",
 	Health = "?",
 	Respawns = 0,
+	-- Where the root is actually being sent. A mode that silently fails to
+	-- apply used to be invisible; now it is not.
+	RootMode = "?",
+	RootY = 0,
 	Drift = 0,
 	MaxDrift = 0,
 }
@@ -973,7 +977,7 @@ end
 	       kept for parity and only attempted if the executor exposes
 	       replicatesignal.
 
-	Mode 3 (No Respawn) never reaches here -- there is nothing to kill.
+	Mode 3 (No Kill) never reaches here -- there is nothing to kill.
 ]]
 local function DoInit(humanoid)
 	if LR.InitMode >= 1 and Env.replicatesignal then
@@ -1401,7 +1405,7 @@ function LR.Start()
 		-- vanishing. Say so plainly instead of pretending it worked.
 		warn("[LimbReanimate] your character has no joints -- it is almost certainly "
 			.. "a corpse, so the kill/respawn did not give you a live body. "
-			.. "Try Init Mode -> 'No Respawn (in-place)', which never kills you "
+			.. "Try Init Mode -> 'No Kill (in-place)', which never kills you "
 			.. "and so never breaks your joints.")
 	end
 
@@ -1571,7 +1575,11 @@ function LR.Start()
 		if RC then
 			local RCHumanoid = RC:FindFirstChildOfClass("Humanoid")
 			local RCRootPart = RC:FindFirstChild("HumanoidRootPart")
+			-- R6 calls it "Torso"; R15 has no such part, so an R15 rig -- clone
+			-- or auto skeleton -- must be resolved to LowerTorso.
 			local RCTorso = RC:FindFirstChild("Torso")
+				or RC:FindFirstChild("LowerTorso")
+				or RC:FindFirstChild("UpperTorso")
 
 			if Camera then
 				Camera.CameraSubject = RCHumanoid
@@ -1600,7 +1608,14 @@ function LR.Start()
 				RunService.Heartbeat:Wait()
 				local t = os.clock()
 
-				if RCRootPart and RCTorso then
+				--[[
+					Gated on the ROOT only. This used to require RCTorso too,
+					which does not exist on an R15 rig -- so the whole block was
+					skipped, every RootPart Mode silently became "very void",
+					and the body was dragged to Y = -70000 no matter what you
+					picked. Mode 4 is the only line that actually needs a torso.
+				]]
+				if RCRootPart then
 					if LR.Mode == 1 then
 						rootcf = CFrame.new(rootposition2)
 					end
@@ -1610,7 +1625,9 @@ function LR.Start()
 						rootcf = CFrame.new(RCRootPart.Position + Vector3.new(0, -16, 0))
 					end
 					if LR.Mode == 3 then rootcf = RCRootPart.CFrame end
-					if LR.Mode == 4 then rootcf = RCTorso.CFrame end
+					if LR.Mode == 4 then
+						rootcf = (RCTorso and RCTorso.CFrame) or RCRootPart.CFrame
+					end
 
 					if LR.Velocity == 1 then
 						rootvel = RCRootPart.AssemblyLinearVelocity
@@ -1650,6 +1667,13 @@ function LR.Start()
 					if d > LR.Diag.MaxDrift then LR.Diag.MaxDrift = d end
 				end
 				lastRootTarget = flingtarget and nil or rootcf.Position
+				LR.Diag.RootY = rootcf.Position.Y
+				LR.Diag.RootMode = ({
+					"very void", "void", "streamed", "on rig root", "on rig torso",
+				})[LR.Mode + 1] or "?"
+				if Workspace.StreamingEnabled and LR.Mode ~= 2 then
+					LR.Diag.RootMode ..= " (forced streamed)"
+				end
 
 				-- Count the driven joints and, in the same pass, notice when the
 				-- set of them changes so the hide panel can rebuild itself from
@@ -2295,10 +2319,10 @@ dropdown(body, "Init Mode", {
 	"Reset Character",
 	"CDSB + Reset",
 	"CDSB + SSE + Kill",
-	"No Respawn (in-place)",
+	"No Kill (in-place)",
 }, LR.InitMode + 1, function(i) LR.InitMode = i - 1 end)
 label(body,
-	"No Respawn never kills you: it takes animation authority from the body you already have, and Deanimate hands that same body back instead of respawning you.",
+	"No Kill never kills you at all: it takes animation authority from the body you already have, and Deanimate hands that same body back. It is NOT the permadeath 'no respawn' reanimate.",
 	11, COL.DIM, Enum.TextXAlignment.Center)
 
 do
@@ -2458,6 +2482,7 @@ local statusConn = RunService.Heartbeat:Connect(function()
 			("joints      : %d driven, %d pinned"):format(d.Mapped, d.Unmapped),
 			("your body   : %d joints, %s"):format(d.RealJoints, d.BodyState),
 			("body health : %s   respawns: %d"):format(d.Health, d.Respawns),
+			("root goes to: %s  (y %.0f)"):format(d.RootMode, d.RootY),
 			("rig parts   : %d"):format(d.RigParts),
 			("root drift  : %.2f now, %.2f max"):format(d.Drift, d.MaxDrift),
 			("replicating : %s"):format(App.HasHiddenProps and "yes" or "NO (local only)"),

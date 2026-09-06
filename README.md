@@ -29,10 +29,10 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/HiddenProto/LimbReani
 change under you. A new one is published with every update:
 
 ```lua
-loadstring(game:HttpGet("https://raw.githubusercontent.com/HiddenProto/LimbReanimate/v1.8.2/src/LimbReanimate.lua"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/HiddenProto/LimbReanimate/v1.9.0/src/LimbReanimate.lua"))()
 ```
 
-Current release: **v1.8.2**
+Current release: **v1.9.0**
 
 ---
 
@@ -42,12 +42,12 @@ Same options as Uhhhhhh's Limbs page.
 
 | Control | What it does |
 |---|---|
-| `* Reanimate *` / `* Deanimate *` | Start / stop. Deanimate kills you once more so the server respawns you clean — except in **No Respawn**, where it restores the body you already have. |
+| `* Reanimate *` / `* Deanimate *` | Start / stop. Deanimate kills you once more so the server respawns you clean — except in **No Kill**, where it restores the body you already have. |
 | Show Reanimate Hitboxes | Wireframes your real root part for 5 seconds. |
 | Refresh Reanimate Character | Rebuilds the fake rig in place without deanimating. |
 | **RootPart Mode** | Where the real root part gets parked. 5 options — see below. |
 | **RootPart Velocity** | What velocity the parked root is given each frame. |
-| **Init Mode** | How the character enters the reanimated state — including **No Respawn**, which never kills you. |
+| **Init Mode** | How the character enters the reanimated state — including **No Kill**, which never kills you. |
 | **Rig Source** | `Built-in` or `Origin Only` — see below. Built-in adapts to your rig type: hardcoded R6 skeleton on R6, auto-built skeleton on R15. |
 | **Animate Fake Rig** | Plays your own character animations on the rig, which your real limbs then copy. On for Built-in; **forced off when Origin Only starts**, since that mode exists to hand the rig to your own script. The Animator is there either way. |
 | Show me how I look! | Throttles joint writes to 10/s, so you see roughly what other players receive. |
@@ -90,10 +90,15 @@ rig source  : Skeleton (auto)
 joints      : 14 driven, 0 pinned
 your body   : 14 joints, Running
 body health : 100/100   respawns: 1
+root goes to: on rig torso  (y 4)
 rig parts   : 15
 root drift  : 1.84 now, 2.03 max
 replicating : yes
 ```
+
+`root goes to` is the RootPart Mode that is **actually being applied**, not the
+one you picked. If those disagree, the mode is failing to resolve — that is
+exactly how R15 used to end up at `y -70000` no matter what was selected.
 
 Read `driven` against `your body`:
 
@@ -101,7 +106,7 @@ Read `driven` against `your body`:
 |---|---|
 | `driven` matches `your body` | everything your character has is being posed |
 | `0 driven`, healthy `your body` | the joints exist but were never matched — a mapping problem |
-| **`your body : 0 joints`** | **the body is a corpse.** Death destroys Motor6Ds and they never come back. The root is still written, but every limb falls away — the character flashes into view and vanishes. Use `Init Mode → No Respawn`, which never kills you |
+| **`your body : 0 joints`** | **the body is a corpse.** Death destroys Motor6Ds and they never come back. The root is still written, but every limb falls away — the character flashes into view and vanishes. Use `Init Mode → No Kill`, which never kills you |
 | `respawns: 0` | the kill never produced a new character at all |
 
 **Root drift** is the distance between where the root was written last frame and
@@ -209,12 +214,15 @@ Also exposed: `LR.Reanimate.IsOrigin`, `.Animator`, `.Tracks`
 | Reset Character | `Humanoid.Health = 0`, then the Dead state change. |
 | CDSB + Reset | Fires `Player.ConnectDiedSignalBackend` first, then the above. |
 | CDSB + SSE + Kill | CDSB, then `SetStateEnabled(Dead, true)` + `ChangeState(Dead)`. Default. |
-| **No Respawn (in-place)** | Never kills you. See below. |
+| **No Kill (in-place)** | Never kills you at all. See below. |
 
 `CDSB` is patched on current clients and is only attempted at all if your
 executor exposes `replicatesignal`. It is kept for parity with the original.
 
-### No Respawn
+### No Kill (in-place)
+
+**This is not the permadeath "no respawn" reanimate.** It is the opposite: you
+never die at all.
 
 The kill was never the mechanism. The mechanism is **animation authority** — the
 `Animator` is what overwrites your joints, and breaking joints is incidental,
