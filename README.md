@@ -29,10 +29,10 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/HiddenProto/LimbReani
 change under you. A new one is published with every update:
 
 ```lua
-loadstring(game:HttpGet("https://raw.githubusercontent.com/HiddenProto/LimbReanimate/v1.11.1/src/LimbReanimate.lua"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/HiddenProto/LimbReanimate/v1.12.0/src/LimbReanimate.lua"))()
 ```
 
-Current release: **v1.11.1**
+Current release: **v1.12.0**
 
 ---
 
@@ -48,6 +48,7 @@ Same options as Uhhhhhh's Limbs page.
 | **RootPart Mode** | Where the real root part gets parked. 5 options — see below. |
 | **RootPart Velocity** | What velocity the parked root is given each frame. |
 | **Init Mode** | How the character enters the reanimated state — including **No Kill**, which never kills you. |
+| **Animation Style** | `Roblox animations` or `Procedural (built-in)` — see below. |
 | **Drive Mode** | `Auto`, `Joints only` or `Loose Parts only` — see below. |
 | **Rig Source** | `Built-in` or `Origin Only` — see below. Built-in adapts to your rig type: hardcoded R6 skeleton on R6, auto-built skeleton on R15. |
 | **Animate Fake Rig** | Plays your own character animations on the rig, which your real limbs then copy. On for Built-in; **forced off when Origin Only starts**, since that mode exists to hand the rig to your own script. The Animator is there either way. |
@@ -121,6 +122,25 @@ have no R6 equivalent, so they stay at rest.
 
 **Rig Source** and **Init Mode** apply on the next reanimate. Everything else is
 read every frame and applies live.
+
+### Animation Style
+
+Something has to move the rig, or your limbs copy a rigid pose and only the
+root looks alive — bobbing along with the humanoid while the body stays a solid
+block.
+
+| Style | How the rig moves |
+|---|---|
+| **Roblox animations** | loads your character's animation ids onto the rig's `Animator`. Needs those assets to actually load. |
+| **Procedural (built-in)** | poses the rig's joints from code — a walk, idle and jump written directly. **No assets, nothing to load, nothing to fail.** |
+
+Procedural is how the original script does *all* of its motion, and it is the
+only thing that works when animations are unavailable. It is selected
+automatically if no animation tracks load.
+
+The `anim` diagnostic line says which is running and how much of it resolved:
+`roblox, 7 tracks`, `procedural, 10 joints`, or `off`. **`roblox, 0 tracks` is
+the rigid-body case** — nothing loaded, so nothing moves.
 
 ### Drive Mode
 
