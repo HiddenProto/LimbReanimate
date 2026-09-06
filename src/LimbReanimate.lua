@@ -8,7 +8,7 @@
 	Repo: https://github.com/HiddenProto/LimbReanimate
 ]]
 
-local SCRIPT_VERSION = "1.1.0"
+local SCRIPT_VERSION = "1.2.0"
 
 --==============================================================================
 -- 0. SINGLE INSTANCE GUARD
@@ -356,6 +356,81 @@ local function BuildFakeRig()
 	return char
 end
 
+--[[
+	ORIGIN RIG.
+
+	A clone of your real character, used as the rig instead of the built-in R6
+	skeleton. Because it is structurally identical to the thing being puppeted,
+	the limb mapping collapses to identity -- joint X drives joint X by name --
+	and R6/R15 stops mattering.
+
+	Everything that could animate it or talk to the server is stripped: scripts,
+	Animators, tools. What is left is a bare posable assembly with a Humanoid so
+	it can still walk. Nothing poses its limbs unless you do.
+]]
+local function BuildOriginRig()
+	local src = Player.Character
+	if not src then return nil, "no character to clone" end
+
+	local ok, clone = pcall(function()
+		-- Archivable is false on live character parts often enough to matter.
+		local restore = {}
+		for _, d in src:GetDescendants() do
+			if not d.Archivable then
+				table.insert(restore, d)
+				d.Archivable = true
+			end
+		end
+		local wasArchivable = src.Archivable
+		src.Archivable = true
+		local c = src:Clone()
+		src.Archivable = wasArchivable
+		for _, d in restore do
+			d.Archivable = false
+		end
+		return c
+	end)
+	if not ok or not clone then
+		return nil, "clone failed: " .. tostring(clone)
+	end
+
+	clone.Name = "LimbReanimate_OriginRig"
+
+	for _, d in clone:GetDescendants() do
+		if d:IsA("BaseScript") or d:IsA("ModuleScript") then
+			d:Destroy()
+		elseif d:IsA("Animator") then
+			-- The whole point of this mode: nothing animates the rig but you.
+			d:Destroy()
+		elseif d:IsA("Tool") then
+			d:Destroy()
+		end
+	end
+
+	local hum = clone:FindFirstChildOfClass("Humanoid")
+	if not hum then
+		clone:Destroy()
+		return nil, "clone has no Humanoid"
+	end
+	hum.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+	hum.RequiresNeck = false
+	hum.BreakJointsOnDeath = false
+	hum.Health = hum.MaxHealth
+	hum:SetStateEnabled(Enum.HumanoidStateType.Dead, false)
+
+	local ff = Util.Instance("ForceField", clone)
+	ff.Visible = false
+
+	local root = clone:FindFirstChild("HumanoidRootPart")
+	if not root then
+		clone:Destroy()
+		return nil, "clone has no HumanoidRootPart"
+	end
+	clone.PrimaryPart = root
+
+	return clone
+end
+
 --==============================================================================
 -- 6. REANIMATE STATE + CONTROL
 --==============================================================================
@@ -369,6 +444,14 @@ Reanimate.CharacterScale = 1
 Reanimate.PlaceholderTransparency = 0.5
 Reanimate.LocalTransparencyModifier = 0
 Reanimate.UsePhysicsRepRootPart = false
+Reanimate.RigSource = 0
+-- 0 = Built-in R6   -- a hardcoded invisible R6 skeleton, converted to your real
+--                      rig by the limb map. Animated for you.
+-- 1 = Origin Only   -- the rig is a structural CLONE of your real character.
+--                      Identity mapping, no Animator, nothing poses it but you.
+Reanimate.ActiveRigSource = 0 -- latched at Start; the map is built against it
+Reanimate.RigParts = {}       -- cached BaseParts of the rig, for the hide loop
+
 Reanimate.AnimateRig = true
 Reanimate.AnimIds = nil       -- harvested off your real Animate script
 Reanimate.Animator = nil      -- the rig's Animator, exposed for custom players
@@ -533,17 +616,38 @@ function Reanimate.CreateCharacter(InitCFrame)
 
 	Reanimate.DestroyCharacter()
 
-	local RC = BuildFakeRig()
+	local origin = Reanimate.ActiveRigSource == 1
+	local RC
+	if origin then
+		local built, err = BuildOriginRig()
+		if built then
+			RC = built
+		else
+			-- Never leave the player with no rig at all.
+			warn("[LimbReanimate] origin rig unavailable (" .. tostring(err) .. "), using built-in R6")
+			origin = false
+			Reanimate.ActiveRigSource = 0
+			RC = BuildFakeRig()
+		end
+	else
+		RC = BuildFakeRig()
+	end
+	Reanimate.IsOrigin = origin
+
 	pcall(function() RC.ModelStreamingMode = Enum.ModelStreamingMode.Persistent end)
 	-- Without this the engine unloads the void-parked real root and our writes
 	-- stop landing.
 	pcall(function() Player.ReplicationFocus = Workspace end)
 
-	RC:ScaleTo(Reanimate.CharacterScale)
+	-- An origin clone already carries the avatar's own body scale; ScaleTo would
+	-- stomp it.
+	if not origin then
+		RC:ScaleTo(Reanimate.CharacterScale)
+	end
 	RC.Parent = Workspace
 
-	local RCRoot = RC.HumanoidRootPart
-	local RCHum = RC.Humanoid
+	local RCRoot = RC:FindFirstChild("HumanoidRootPart")
+	local RCHum = RC:FindFirstChildOfClass("Humanoid")
 	RCRoot.RootPriority = 67
 	RCRoot.CFrame = cf
 
@@ -551,7 +655,22 @@ function Reanimate.CreateCharacter(InitCFrame)
 	bf.Force = Vector3.zero
 
 	Reanimate.Character = RC
-	Reanimate.AnimConn = SetupRigAnimation(RC, RCHum, RCRoot)
+
+	-- Cache the rig's parts once. The hide loop runs every frame and cannot
+	-- afford a GetDescendants() walk, and it cannot use hardcoded R6 names
+	-- either now that the rig may be an R15 clone.
+	local parts = {}
+	for _, d in RC:GetDescendants() do
+		if d:IsA("BasePart") then
+			table.insert(parts, d)
+		end
+	end
+	Reanimate.RigParts = parts
+
+	-- Origin mode gets no Animator at all -- that is the point of it.
+	if not origin then
+		Reanimate.AnimConn = SetupRigAnimation(RC, RCHum, RCRoot)
+	end
 
 	-- Drive the fake rig from real player input.
 	RigDriveConn = RunService.PreSimulation:Connect(function()
@@ -663,8 +782,6 @@ local function DoInit(humanoid)
 end
 
 function LR.Start()
-	local LimbNames = { "Head", "Torso", "Left Arm", "Right Arm", "Left Leg", "Right Leg" }
-
 	-- Rolled ONCE per session, not per frame, and randomised in X/Z so two
 	-- players never park their roots in the same spot.
 	local rootposition = Vector3.new(
@@ -690,7 +807,16 @@ function LR.Start()
 		end
 	end
 
-	local LimbMapping = MakeLimbMap()
+	-- Latched here, not read live: the mapping below is built against whichever
+	-- rig this run uses, so switching source mid-run would leave every entry
+	-- pointing at part names that no longer exist.
+	Reanimate.ActiveRigSource = Reanimate.RigSource
+	local OriginMode = Reanimate.ActiveRigSource == 1
+
+	-- Built-in mode needs the conversion table. Origin mode does not: the rig is
+	-- a clone of the thing being driven, so the map is identity and is built
+	-- from the real character's own joints as they are discovered.
+	local LimbMapping = OriginMode and {} or MakeLimbMap()
 
 	----------------------------------------------------------------------------
 	-- Tool mirroring: the real Tool stays on the real (puppeted) character, so
@@ -711,7 +837,10 @@ function LR.Start()
 		local RightGrip = Instance.new("Weld")
 		RightGrip.Name = "RightGrip"
 		RightGrip.Parent = Handle
-		RightGrip.Part0 = Reanimate.Character and Reanimate.Character:FindFirstChild("Right Arm")
+		-- R6 calls it "Right Arm", R15 calls it "RightHand". An origin rig can be
+		-- either, so do not assume.
+		local rc = Reanimate.Character
+		RightGrip.Part0 = rc and (rc:FindFirstChild("Right Arm") or rc:FindFirstChild("RightHand"))
 		RightGrip.Part1 = Handle
 		RightGrip.C0 = RIGHTGRIP_C0
 		RightGrip.C1 = FakeTool.Grip
@@ -744,6 +873,20 @@ function LR.Start()
 						map.Reference = v
 						return
 					end
+				end
+				-- Origin mode: identity. Same joint, same part names, no
+				-- conversion. The root joint still substitutes the REAL root
+				-- part so it keeps absorbing the void offset.
+				if OriginMode then
+					table.insert(LimbMapping, {
+						Part0 = p0,
+						Part1 = p1,
+						Type = 1,
+						RPart0 = (p0 == "HumanoidRootPart") and "ROOT" or p0,
+						RPart1 = p1,
+						Reference = v,
+					})
+					return
 				end
 			end
 			table.insert(UnknownMotor6Ds, v)
@@ -818,8 +961,13 @@ function LR.Start()
 		lastspawn = os.clock()
 		table.clear(BaseParts)
 		table.clear(UnknownMotor6Ds)
-		for _, map in LimbMapping do
-			map.Reference = nil
+		if OriginMode then
+			-- Entries are discovered, not fixed, so drop them entirely.
+			table.clear(LimbMapping)
+		else
+			for _, map in LimbMapping do
+				map.Reference = nil
+			end
 		end
 		character.DescendantAdded:Connect(CharOnDesc)
 		for _, v in character:GetDescendants() do
@@ -1002,9 +1150,10 @@ function LR.Start()
 			-- The rig's own parts are the stand-in. Hide them while the real
 			-- limbs are following; show them at 0.5 when they are not, so a
 			-- broken reanimate is obvious instead of invisible.
-			for _, v in RC:GetChildren() do
-				if v:IsA("BasePart") and table.find(LimbNames, v.Name) then
-					v.Transparency = ReanimOkay and 1 or Reanimate.PlaceholderTransparency
+			local ph = ReanimOkay and 1 or Reanimate.PlaceholderTransparency
+			for _, v in Reanimate.RigParts do
+				if v.Parent then
+					v.Transparency = ph
 				end
 			end
 
@@ -1539,6 +1688,14 @@ label(body,
 	"Only works in SOME games. Games that recreate the Animator automatically will fight the joint writes and win.",
 	11, COL.DIM, Enum.TextXAlignment.Center)
 
+dropdown(body, "Rig Source", {
+	"Built-in R6",
+	"Origin Only (clone)",
+}, Reanimate.RigSource + 1, function(i) Reanimate.RigSource = i - 1 end)
+label(body,
+	"Origin Only uses a clone of your real character as the rig. Identity mapping, R6 or R15, no Animator -- nothing poses it but your own script.",
+	11, COL.DIM, Enum.TextXAlignment.Center)
+
 dropdown(body, "RootPart Mode", {
 	"RootPart in very void",
 	"RootPart in void",
@@ -1561,7 +1718,7 @@ dropdown(body, "Init Mode", {
 
 toggle(body, "Animate Fake Rig", Reanimate.AnimateRig, function(v) Reanimate.AnimateRig = v end)
 label(body,
-	"Plays your own character animations on the rig, which is what your real limbs then copy. Turn OFF only if you are posing the rig yourself.",
+	"Plays your own character animations on the rig, which is what your real limbs then copy. Turn OFF only if you are posing the rig yourself. Ignored in Origin Only.",
 	11, COL.DIM, Enum.TextXAlignment.Center)
 
 toggle(body, "Show me how I look!", LR.ReplicateFPS10, function(v) LR.ReplicateFPS10 = v end)
@@ -1574,7 +1731,7 @@ label(body,
 	11, COL.DIM, Enum.TextXAlignment.Center)
 
 separator(body)
-label(body, "Init Mode applies on the NEXT reanimate. Everything else is live.", 11, COL.DIM, Enum.TextXAlignment.Center)
+label(body, "Rig Source and Init Mode apply on the NEXT reanimate. Everything else is live.", 11, COL.DIM, Enum.TextXAlignment.Center)
 label(body, "RightControl hides/shows this window.", 11, COL.DIM, Enum.TextXAlignment.Center)
 
 if not App.HasHiddenProps then

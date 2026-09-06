@@ -64,6 +64,23 @@ rig's Humanoid every frame.
 The rig's part CFrames are the **source poses**. Your real limbs are going to be
 driven to match them.
 
+### Two kinds of rig
+
+**Built-in R6** is the default: a generic R6 skeleton, and the limb map converts
+its six joints onto your real rig, R6 (`Type 1`, straight object-space copy) or
+R15 (`Type 2`, with C0/C1 attachment offsets applied).
+
+**Origin Only** clones your real character instead. That collapses the whole
+conversion problem: the rig is structurally the same thing being puppeted, so
+the mapping is **identity** — joint X drives joint X, matched by part name — and
+the map is built from the real character's own joints as they are discovered
+rather than from a table. R6 and R15 stop being different cases. The clone is
+stripped of every script, Animator and Tool, keeping a Humanoid so it can still
+walk; nothing poses its limbs unless you do.
+
+The root joint behaves the same in both: `Part0` is substituted for the REAL
+root part, so it keeps absorbing the void offset.
+
 ### Where the animation comes from
 
 A rig with no animation source is a rig that slides around stiff, so the rig
