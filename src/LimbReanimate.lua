@@ -8,7 +8,7 @@
 	Repo: https://github.com/HiddenProto/LimbReanimate
 ]]
 
-local SCRIPT_VERSION = "1.0.1"
+local SCRIPT_VERSION = "1.1.0"
 
 --==============================================================================
 -- 0. SINGLE INSTANCE GUARD
@@ -369,6 +369,123 @@ Reanimate.CharacterScale = 1
 Reanimate.PlaceholderTransparency = 0.5
 Reanimate.LocalTransparencyModifier = 0
 Reanimate.UsePhysicsRepRootPart = false
+Reanimate.AnimateRig = true
+Reanimate.AnimIds = nil       -- harvested off your real Animate script
+Reanimate.Animator = nil      -- the rig's Animator, exposed for custom players
+Reanimate.Tracks = nil        -- slot -> AnimationTrack
+Reanimate.AnimConn = nil
+
+--==============================================================================
+-- 6a. RIG ANIMATION
+--
+-- Uhhhhhh never creates an Animator; its rig is posed procedurally by moveset
+-- modules. This build does it the other way: the rig gets a real Animator and
+-- plays your actual character animations on itself.
+--
+-- This is safe precisely BECAUSE the rig is client-only. The real character
+-- must stay Animator-free -- an Animator there overwrites every joint we write.
+-- On the rig there is nothing to fight, and the joint loop reads the rig's part
+-- CFrames, which already carry whatever the Animator posed.
+--==============================================================================
+
+local DEFAULT_R6_ANIMS = {
+	idle  = "rbxassetid://180435571",
+	walk  = "rbxassetid://180426354",
+	run   = "rbxassetid://180426354",
+	jump  = "rbxassetid://125750702",
+	fall  = "rbxassetid://180436148",
+	climb = "rbxassetid://180436334",
+	sit   = "rbxassetid://178130996",
+}
+
+local ANIM_SLOTS = { "idle", "walk", "run", "jump", "fall", "climb", "sit" }
+
+-- Reads the animation ids out of the character's Animate script, so an owned
+-- animation package is used instead of the stock set. Must be called BEFORE
+-- that script is destroyed.
+local function HarvestAnimIds(character)
+	if not character then return nil end
+	local hum = character:FindFirstChildOfClass("Humanoid")
+	-- The rig is R6. R15 animation ids target R15 joint names and will not
+	-- move an R6 rig at all, so only harvest from an R6 character.
+	if not hum or hum.RigType ~= Enum.HumanoidRigType.R6 then return nil end
+	local animate = character:FindFirstChild("Animate")
+	if not animate then return nil end
+
+	local out, found = {}, false
+	for _, slot in ANIM_SLOTS do
+		local folder = animate:FindFirstChild(slot)
+		if folder then
+			local a = folder:FindFirstChildWhichIsA("Animation")
+			if a and a.AnimationId ~= "" then
+				out[slot] = a.AnimationId
+				found = true
+			end
+		end
+	end
+	return found and out or nil
+end
+
+local function SetupRigAnimation(RC, hum, root)
+	local animator = hum:FindFirstChildOfClass("Animator")
+	if not animator then
+		animator = Instance.new("Animator")
+		animator.Parent = hum
+	end
+	Reanimate.Animator = animator
+
+	local ids = Reanimate.AnimIds or DEFAULT_R6_ANIMS
+	local tracks = {}
+	for slot, id in ids do
+		local a = Instance.new("Animation")
+		a.AnimationId = id
+		local ok, track = pcall(function() return animator:LoadAnimation(a) end)
+		if ok and track then tracks[slot] = track end
+	end
+	Reanimate.Tracks = tracks
+
+	local current = nil
+	local function play(slot, speed)
+		local track = tracks[slot] or tracks.idle
+		if track ~= current then
+			if current then current:Stop(0.1) end
+			current = track
+			if track then track:Play(0.1) end
+		end
+		if track and speed then track:AdjustSpeed(speed) end
+	end
+
+	return RunService.Heartbeat:Connect(function()
+		if not RC.Parent then return end
+		-- Turn this off to drive the rig yourself. Leaving it on while a custom
+		-- animator also poses the rig means the two fight every frame.
+		if not Reanimate.AnimateRig then
+			if current then
+				current:Stop(0.1)
+				current = nil
+			end
+			return
+		end
+		local st = hum:GetState()
+		if hum.Sit or st == Enum.HumanoidStateType.Seated then
+			play("sit", 1)
+		elseif st == Enum.HumanoidStateType.Climbing then
+			play("climb", 1)
+		elseif st == Enum.HumanoidStateType.Jumping then
+			play("jump", 1)
+		elseif st == Enum.HumanoidStateType.Freefall then
+			play("fall", 1)
+		else
+			local v = root.AssemblyLinearVelocity
+			local sp = Vector3.new(v.X, 0, v.Z).Magnitude
+			if sp > 0.5 then
+				play(sp > 12 and "run" or "walk", math.clamp(sp / 14.5, 0.4, 3))
+			else
+				play("idle", 1)
+			end
+		end
+	end)
+end
 
 -- Movement is read off the stock PlayerModule so keyboard, gamepad and the
 -- mobile thumbstick all work without reimplementing an input layer.
@@ -393,6 +510,9 @@ local RigDriveConn = nil
 
 function Reanimate.DestroyCharacter()
 	if RigDriveConn then RigDriveConn:Disconnect() RigDriveConn = nil end
+	if Reanimate.AnimConn then Reanimate.AnimConn:Disconnect() Reanimate.AnimConn = nil end
+	Reanimate.Animator = nil
+	Reanimate.Tracks = nil
 	if Reanimate.Character then
 		Reanimate.Character:Destroy()
 		Reanimate.Character = nil
@@ -431,6 +551,7 @@ function Reanimate.CreateCharacter(InitCFrame)
 	bf.Force = Vector3.zero
 
 	Reanimate.Character = RC
+	Reanimate.AnimConn = SetupRigAnimation(RC, RCHum, RCRoot)
 
 	-- Drive the fake rig from real player input.
 	RigDriveConn = RunService.PreSimulation:Connect(function()
@@ -559,6 +680,9 @@ function LR.Start()
 
 	local InitCFrame = nil
 	if Player.Character then
+		-- Harvest BEFORE the kill: the pre-kill character still has an intact
+		-- Animate script to read the ids out of.
+		Reanimate.AnimIds = HarvestAnimIds(Player.Character) or Reanimate.AnimIds
 		local h = Player.Character:FindFirstChildOfClass("Humanoid")
 		if h and h.RootPart then
 			InitCFrame = h.RootPart.CFrame
@@ -712,7 +836,10 @@ function LR.Start()
 			character.ChildAdded:Wait()
 			animate = character:FindFirstChild("Animate")
 		end
-		if animate then animate:Destroy() end
+		if animate then
+			Reanimate.AnimIds = HarvestAnimIds(character) or Reanimate.AnimIds
+			animate:Destroy()
+		end
 	end)
 
 	-- Bounded wait for the respawn. An unbounded CharacterAdded:Wait() strands
@@ -1432,6 +1559,11 @@ dropdown(body, "Init Mode", {
 	"CDSB + SSE + Kill",
 }, LR.InitMode + 1, function(i) LR.InitMode = i - 1 end)
 
+toggle(body, "Animate Fake Rig", Reanimate.AnimateRig, function(v) Reanimate.AnimateRig = v end)
+label(body,
+	"Plays your own character animations on the rig, which is what your real limbs then copy. Turn OFF only if you are posing the rig yourself.",
+	11, COL.DIM, Enum.TextXAlignment.Center)
+
 toggle(body, "Show me how I look!", LR.ReplicateFPS10, function(v) LR.ReplicateFPS10 = v end)
 toggle(body, "Target Fling Enabled", LR.FlingEnabled, function(v) LR.FlingEnabled = v end)
 label(body, "^ touch a player = they lose ownership", 11, COL.DIM, Enum.TextXAlignment.Center)
@@ -1442,7 +1574,7 @@ label(body,
 	11, COL.DIM, Enum.TextXAlignment.Center)
 
 separator(body)
-label(body, "Changes apply on the NEXT reanimate.", 11, COL.DIM, Enum.TextXAlignment.Center)
+label(body, "Init Mode applies on the NEXT reanimate. Everything else is live.", 11, COL.DIM, Enum.TextXAlignment.Center)
 label(body, "RightControl hides/shows this window.", 11, COL.DIM, Enum.TextXAlignment.Center)
 
 if not App.HasHiddenProps then

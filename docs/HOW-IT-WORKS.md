@@ -64,6 +64,34 @@ rig's Humanoid every frame.
 The rig's part CFrames are the **source poses**. Your real limbs are going to be
 driven to match them.
 
+### Where the animation comes from
+
+A rig with no animation source is a rig that slides around stiff, so the rig
+gets its **own `Animator`**, and your character's animations are played on
+*that*.
+
+This is the one place the design departs from Uhhhhhh, which never creates an
+Animator at all — its rig is posed procedurally by moveset modules, and its
+`LoadAnimation` hook only *defuses* animations (it loads them onto a throwaway
+Humanoid inside a Model it immediately destroys, then hands back a dead track).
+
+Putting the Animator on the rig is safe **precisely because the rig is
+client-only**. The rule that matters is directional:
+
+- an Animator on the **real character** overwrites every joint you write, one
+  frame at a time, and wins — so it is destroyed;
+- an Animator on the **rig** has nothing to fight, and the joint loop reads the
+  rig's *part CFrames*, which already carry whatever it posed.
+
+The ids are harvested out of your character's `Animate` script before that
+script is destroyed, so an owned animation package is used rather than the stock
+set. Harvesting is skipped for an R15 character — R15 animation ids target R15
+joint names and will not move an R6 rig — and it falls back to the stock R6 ids.
+
+The same rule applies to a custom animation player: pose the **rig**. Anything
+written to the real character's motors is overwritten from the rig before it can
+replicate.
+
 ### 4. Park the real root part in the void
 
 Your real character is still there, still yours, and now has loose joints. The

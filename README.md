@@ -29,10 +29,10 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/HiddenProto/LimbReani
 change under you. A new one is published with every update:
 
 ```lua
-loadstring(game:HttpGet("https://raw.githubusercontent.com/HiddenProto/LimbReanimate/v1.0.1/src/LimbReanimate.lua"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/HiddenProto/LimbReanimate/v1.1.0/src/LimbReanimate.lua"))()
 ```
 
-Current release: **v1.0.1**
+Current release: **v1.1.0**
 
 ---
 
@@ -48,12 +48,30 @@ Same options as Uhhhhhh's Limbs page.
 | **RootPart Mode** | Where the real root part gets parked. 5 options — see below. |
 | **RootPart Velocity** | What velocity the parked root is given each frame. |
 | **Init Mode** | How the character is killed to enter the loose-limb state. |
+| **Animate Fake Rig** | Plays your own character animations on the rig, which your real limbs then copy. On by default. Turn it off only when you are posing the rig yourself. |
 | Show me how I look! | Throttles joint writes to 10/s, so you see roughly what other players receive. |
 | Target Fling Enabled | Lets `Fling()` queue targets. Touching a player takes network ownership of them. |
 | Use NaN State Fling | Uses a NaN `MoveDirectionInternal` instead of a huge velocity to do the flinging. |
 | Root Jitter | Nudges the root 0.005 studs on Z every frame so identical CFrames aren't dropped before replicating. **Default off** — it visibly shakes the torso. Turn it on only if a game is dropping your root writes. |
 
-**Settings apply on the next reanimate**, not the current one.
+**Init Mode** applies on the next reanimate. Everything else is read every frame
+and applies live.
+
+### Driving the rig yourself
+
+Turn **Animate Fake Rig** off and pose the rig directly. Pose the *rig*, never
+the real character — the joint loop overwrites the real character's motors every
+frame from the rig, so anything written there is gone before it replicates.
+
+```lua
+local LR = _G.LimbReanimate
+local rig      = LR.Reanimate.Character   -- Model, client-only R6
+local animator = LR.Reanimate.Animator    -- Animator on the rig's Humanoid
+local tracks   = LR.Reanimate.Tracks      -- {idle, walk, run, jump, fall, climb, sit}
+
+LR.Reanimate.AnimateRig = false           -- stop the built-in driver fighting you
+rig.Torso["Right Shoulder"].Transform = CFrame.Angles(0, 0, math.rad(-90))
+```
 
 ### RootPart Mode
 
