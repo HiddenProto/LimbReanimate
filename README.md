@@ -29,10 +29,10 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/HiddenProto/LimbReani
 change under you. A new one is published with every update:
 
 ```lua
-loadstring(game:HttpGet("https://raw.githubusercontent.com/HiddenProto/LimbReanimate/v1.11.0/src/LimbReanimate.lua"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/HiddenProto/LimbReanimate/v1.11.1/src/LimbReanimate.lua"))()
 ```
 
-Current release: **v1.11.0**
+Current release: **v1.11.1**
 
 ---
 

@@ -8,7 +8,7 @@
 	Repo: https://github.com/HiddenProto/LimbReanimate
 ]]
 
-local SCRIPT_VERSION = "1.11.0"
+local SCRIPT_VERSION = "1.11.1"
 
 --==============================================================================
 -- 0. SINGLE INSTANCE GUARD
@@ -854,6 +854,21 @@ function Reanimate.CreateCharacter(InitCFrame)
 		RC = BuildFakeRig()
 	end
 
+	-- A rig with no joints of its own can never be animated, so Loose Parts
+	-- would copy a frozen pose onto you forever. Worth saying out loud.
+	do
+		local rj = 0
+		for _, d in RC:GetDescendants() do
+			if d:IsA("Motor6D") then rj += 1 end
+		end
+		if rj == 0 then
+			warn("[LimbReanimate] the rig was built with NO joints, so nothing can "
+				.. "animate it. If Rig Source is Origin Only on a body whose joints "
+				.. "are already gone, the clone has none either -- switch to Built-in, "
+				.. "which rebuilds a skeleton from your rig attachments.")
+		end
+	end
+
 	Reanimate.IsOrigin = RC.Name == "LimbReanimate_OriginRig"
 	Reanimate.RigKind = (RC.Name == "LimbReanimate_OriginRig" and "Origin clone")
 		or (RC.Name == "LimbReanimate_Skeleton" and "Skeleton (auto)")
@@ -1055,6 +1070,11 @@ LR.Diag = {
 	RootMode = "-",
 	RootY = 0,
 	Drive = "-",
+	-- The rig's OWN joint count. A rig with no joints cannot be animated by
+	-- anything, so Loose Parts would copy a frozen pose forever. Without this
+	-- number a rebuilt skeleton is indistinguishable from a jointless clone.
+	RigJoints = 0,
+	PartsDriven = 0,
 	Drift = 0,
 	MaxDrift = 0,
 }
@@ -1589,6 +1609,7 @@ function LR.Start()
 			alone: they are still welded to their limb and follow it for free.
 		]]
 		if DriveLoose then
+			local n = 0
 			for _, v in BaseParts do
 				if v ~= RootPart and v.Parent and not v:FindFirstAncestorWhichIsA("Tool") then
 					local target = RC:FindFirstChild(v.Name)
@@ -1598,9 +1619,11 @@ function LR.Start()
 						else
 							v.CFrame = target.CFrame
 						end
+						n += 1
 					end
 				end
 			end
+			LR.Diag.PartsDriven = n
 			return
 		end
 
@@ -1890,6 +1913,14 @@ function LR.Start()
 					end
 					LR.Diag.RealJoints = real
 					LR.Diag.RigParts = RC and #Reanimate.RigBodyParts or 0
+
+					local rj = 0
+					if RC then
+						for _, d in RC:GetDescendants() do
+							if d:IsA("Motor6D") then rj += 1 end
+						end
+					end
+					LR.Diag.RigJoints = rj
 					LR.Diag.BodyState = Humanoid:GetState().Name
 					LR.Diag.Health = ("%d/%d"):format(
 						math.floor(Humanoid.Health), math.floor(Humanoid.MaxHealth))
@@ -2667,19 +2698,21 @@ local statusConn = RunService.Heartbeat:Connect(function()
 		statusLabel.TextColor3 = COL.ON
 
 		local d = LR.Diag
+		local loose = d.Drive == "loose parts"
 		diagLabel.Text = table.concat({
-			("your rig    : %s"):format(d.RigType),
-			("rig source  : %s"):format(Reanimate.RigKind or "?"),
-			("drive       : %s"):format(d.Drive),
-			("joints      : %d driven, %d pinned"):format(d.Mapped, d.Unmapped),
-			("your body   : %d joints, %s"):format(d.RealJoints, d.BodyState),
-			("body health : %s   respawns: %d"):format(d.Health, d.Respawns),
-			("root goes to: %s  (y %.0f)"):format(d.RootMode, d.RootY),
-			("rig parts   : %d"):format(d.RigParts),
-			("root drift  : %.2f now, %.2f max"):format(d.Drift, d.MaxDrift),
-			("replicating : %s"):format(App.HasHiddenProps and "yes" or "NO (local only)"),
+			("rig    : %s"):format(Reanimate.RigKind or "?"),
+			("       : %d parts, %d joints"):format(d.RigParts, d.RigJoints),
+			("body   : %s, %d joints, %s"):format(d.RigType, d.RealJoints, d.BodyState),
+			("health : %s  resp %d"):format(d.Health, d.Respawns),
+			loose
+				and ("drive  : loose, %d parts driven"):format(d.PartsDriven)
+				or ("drive  : joints, %d driven, %d pinned"):format(d.Mapped, d.Unmapped),
+			("root   : %s, y %.0f"):format(d.RootMode, d.RootY),
+			("drift  : %.2f now, %.2f max"):format(d.Drift, d.MaxDrift),
+			("replic : %s"):format(App.HasHiddenProps and "yes" or "NO (local only)"),
 		}, "\n")
-		diagLabel.TextColor3 = (d.MaxDrift > 50) and COL.OFF or COL.DIM
+		-- A rig with no joints of its own is the one state nothing recovers from.
+		diagLabel.TextColor3 = (d.RigJoints == 0 or d.MaxDrift > 50) and COL.OFF or COL.DIM
 	else
 		statusLabel.Text = "Running: NONE"
 		statusLabel.TextColor3 = COL.DIM
