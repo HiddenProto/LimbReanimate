@@ -8,7 +8,7 @@
 	Repo: https://github.com/HiddenProto/LimbReanimate
 ]]
 
-local SCRIPT_VERSION = "1.2.0"
+local SCRIPT_VERSION = "1.3.0"
 
 --==============================================================================
 -- 0. SINGLE INSTANCE GUARD
@@ -396,13 +396,12 @@ local function BuildOriginRig()
 
 	clone.Name = "LimbReanimate_OriginRig"
 
+	-- Scripts and tools go. The Animator STAYS: an origin rig is meant to pass
+	-- for a real character, so anything that wants to animate it -- the built-in
+	-- driver, or an external animation script written against a reanimator --
+	-- has something to load onto.
 	for _, d in clone:GetDescendants() do
-		if d:IsA("BaseScript") or d:IsA("ModuleScript") then
-			d:Destroy()
-		elseif d:IsA("Animator") then
-			-- The whole point of this mode: nothing animates the rig but you.
-			d:Destroy()
-		elseif d:IsA("Tool") then
+		if d:IsA("BaseScript") or d:IsA("ModuleScript") or d:IsA("Tool") then
 			d:Destroy()
 		end
 	end
@@ -447,8 +446,10 @@ Reanimate.UsePhysicsRepRootPart = false
 Reanimate.RigSource = 0
 -- 0 = Built-in R6   -- a hardcoded invisible R6 skeleton, converted to your real
 --                      rig by the limb map. Animated for you.
--- 1 = Origin Only   -- the rig is a structural CLONE of your real character.
---                      Identity mapping, no Animator, nothing poses it but you.
+-- 1 = Origin Only   -- the rig is a structural CLONE of your real character:
+--                      identity mapping, your real part and joint names, your
+--                      real proportions, a real Animator. It passes for a real
+--                      character, so external animation scripts can drive it.
 Reanimate.ActiveRigSource = 0 -- latched at Start; the map is built against it
 Reanimate.RigParts = {}       -- cached BaseParts of the rig, for the hide loop
 
@@ -486,12 +487,14 @@ local ANIM_SLOTS = { "idle", "walk", "run", "jump", "fall", "climb", "sit" }
 -- Reads the animation ids out of the character's Animate script, so an owned
 -- animation package is used instead of the stock set. Must be called BEFORE
 -- that script is destroyed.
-local function HarvestAnimIds(character)
+local function HarvestAnimIds(character, requireR6)
 	if not character then return nil end
 	local hum = character:FindFirstChildOfClass("Humanoid")
-	-- The rig is R6. R15 animation ids target R15 joint names and will not
-	-- move an R6 rig at all, so only harvest from an R6 character.
-	if not hum or hum.RigType ~= Enum.HumanoidRigType.R6 then return nil end
+	if not hum then return nil end
+	-- The BUILT-IN rig is R6, and R15 ids target R15 joint names, so they would
+	-- load fine and move nothing. An ORIGIN rig matches the character's own rig
+	-- type, so there is nothing to guard against there.
+	if requireR6 and hum.RigType ~= Enum.HumanoidRigType.R6 then return nil end
 	local animate = character:FindFirstChild("Animate")
 	if not animate then return nil end
 
@@ -517,7 +520,13 @@ local function SetupRigAnimation(RC, hum, root)
 	end
 	Reanimate.Animator = animator
 
-	local ids = Reanimate.AnimIds or DEFAULT_R6_ANIMS
+	-- Fall back to the stock R6 set only when the rig really is R6. Loading R6
+	-- ids onto an R15 origin rig succeeds and animates nothing, which looks
+	-- exactly like a broken reanimate.
+	local ids = Reanimate.AnimIds
+	if not ids then
+		ids = (hum.RigType == Enum.HumanoidRigType.R6) and DEFAULT_R6_ANIMS or {}
+	end
 	local tracks = {}
 	for slot, id in ids do
 		local a = Instance.new("Animation")
@@ -667,10 +676,9 @@ function Reanimate.CreateCharacter(InitCFrame)
 	end
 	Reanimate.RigParts = parts
 
-	-- Origin mode gets no Animator at all -- that is the point of it.
-	if not origin then
-		Reanimate.AnimConn = SetupRigAnimation(RC, RCHum, RCRoot)
-	end
+	-- Both modes get a working Animator. Whether the built-in driver actually
+	-- plays anything on it is the AnimateRig toggle.
+	Reanimate.AnimConn = SetupRigAnimation(RC, RCHum, RCRoot)
 
 	-- Drive the fake rig from real player input.
 	RigDriveConn = RunService.PreSimulation:Connect(function()
@@ -782,6 +790,13 @@ local function DoInit(humanoid)
 end
 
 function LR.Start()
+	-- Latched here, not read live: the mapping is built against whichever rig
+	-- this run uses, so switching source mid-run would leave every entry
+	-- pointing at part names that no longer exist. Also decides whether the
+	-- animation harvest below has to restrict itself to R6 ids.
+	Reanimate.ActiveRigSource = Reanimate.RigSource
+	local OriginMode = Reanimate.ActiveRigSource == 1
+
 	-- Rolled ONCE per session, not per frame, and randomised in X/Z so two
 	-- players never park their roots in the same spot.
 	local rootposition = Vector3.new(
@@ -799,19 +814,13 @@ function LR.Start()
 	if Player.Character then
 		-- Harvest BEFORE the kill: the pre-kill character still has an intact
 		-- Animate script to read the ids out of.
-		Reanimate.AnimIds = HarvestAnimIds(Player.Character) or Reanimate.AnimIds
+		Reanimate.AnimIds = HarvestAnimIds(Player.Character, not OriginMode) or Reanimate.AnimIds
 		local h = Player.Character:FindFirstChildOfClass("Humanoid")
 		if h and h.RootPart then
 			InitCFrame = h.RootPart.CFrame
 			DoInit(h)
 		end
 	end
-
-	-- Latched here, not read live: the mapping below is built against whichever
-	-- rig this run uses, so switching source mid-run would leave every entry
-	-- pointing at part names that no longer exist.
-	Reanimate.ActiveRigSource = Reanimate.RigSource
-	local OriginMode = Reanimate.ActiveRigSource == 1
 
 	-- Built-in mode needs the conversion table. Origin mode does not: the rig is
 	-- a clone of the thing being driven, so the map is identity and is built
@@ -985,7 +994,7 @@ function LR.Start()
 			animate = character:FindFirstChild("Animate")
 		end
 		if animate then
-			Reanimate.AnimIds = HarvestAnimIds(character) or Reanimate.AnimIds
+			Reanimate.AnimIds = HarvestAnimIds(character, not OriginMode) or Reanimate.AnimIds
 			animate:Destroy()
 		end
 	end)
@@ -1693,7 +1702,7 @@ dropdown(body, "Rig Source", {
 	"Origin Only (clone)",
 }, Reanimate.RigSource + 1, function(i) Reanimate.RigSource = i - 1 end)
 label(body,
-	"Origin Only uses a clone of your real character as the rig. Identity mapping, R6 or R15, no Animator -- nothing poses it but your own script.",
+	"Origin Only uses a clone of your real character as the rig: identity mapping, R6 or R15, your real part names and a working Animator, so external animation scripts can drive it like a real character.",
 	11, COL.DIM, Enum.TextXAlignment.Center)
 
 dropdown(body, "RootPart Mode", {
@@ -1718,7 +1727,7 @@ dropdown(body, "Init Mode", {
 
 toggle(body, "Animate Fake Rig", Reanimate.AnimateRig, function(v) Reanimate.AnimateRig = v end)
 label(body,
-	"Plays your own character animations on the rig, which is what your real limbs then copy. Turn OFF only if you are posing the rig yourself. Ignored in Origin Only.",
+	"Plays your own character animations on the rig, which is what your real limbs then copy. Turn OFF to hand the rig's Animator to your own script instead.",
 	11, COL.DIM, Enum.TextXAlignment.Center)
 
 toggle(body, "Show me how I look!", LR.ReplicateFPS10, function(v) LR.ReplicateFPS10 = v end)

@@ -29,10 +29,10 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/HiddenProto/LimbReani
 change under you. A new one is published with every update:
 
 ```lua
-loadstring(game:HttpGet("https://raw.githubusercontent.com/HiddenProto/LimbReanimate/v1.2.0/src/LimbReanimate.lua"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/HiddenProto/LimbReanimate/v1.3.0/src/LimbReanimate.lua"))()
 ```
 
-Current release: **v1.2.0**
+Current release: **v1.3.0**
 
 ---
 
@@ -49,7 +49,7 @@ Same options as Uhhhhhh's Limbs page.
 | **RootPart Velocity** | What velocity the parked root is given each frame. |
 | **Init Mode** | How the character is killed to enter the loose-limb state. |
 | **Rig Source** | `Built-in R6` (default) or `Origin Only` — see below. |
-| **Animate Fake Rig** | Plays your own character animations on the rig, which your real limbs then copy. On by default. Turn it off only when you are posing the rig yourself. Ignored in Origin Only. |
+| **Animate Fake Rig** | Plays your own character animations on the rig, which your real limbs then copy. On by default, both rig sources. Turn it off to hand the rig's Animator to your own script. |
 | Show me how I look! | Throttles joint writes to 10/s, so you see roughly what other players receive. |
 | Target Fling Enabled | Lets `Fling()` queue targets. Touching a player takes network ownership of them. |
 | Use NaN State Fling | Uses a NaN `MoveDirectionInternal` instead of a huge velocity to do the flinging. |
@@ -64,34 +64,41 @@ read every frame and applies live.
 |---|---|---|
 | The rig is | a hardcoded invisible R6 skeleton | a **clone of your real character** |
 | Mapping | conversion table, R6 rig → R6/R15 real | **identity** — joint X drives joint X |
+| Part & joint names | always R6 (`Torso`, `Left Arm`) | **your real ones**, R6 or R15 |
 | Proportions | generic R6 | your actual avatar's |
-| Animator | yes, plays your animations | **none** |
-| Posed by | the built-in driver | **only your own script** |
+| Animator | yes | yes |
+| Animation ids | R6 only, stock fallback | **your own**, whatever your rig type |
 
-Origin Only exists for external control. Because the rig is structurally the
-same thing being puppeted, there is no conversion to reason about — whatever you
-do to a rig joint happens to the matching real joint. R6 and R15 both just work.
+Origin Only makes the rig **pass for a real character**. Real part names, real
+joint names, real proportions, a real Humanoid and a real Animator — so an
+external animation script written against a reanimated character can just point
+at it and work, with no conversion to reason about. Whatever you do to a rig
+joint happens to the matching real joint.
 
 If the clone fails for any reason it falls back to the built-in R6 rig and warns
 rather than leaving you with no rig.
 
 ### Driving the rig yourself
 
-Pose the **rig**, never the real character — the joint loop overwrites the real
-character's motors every frame from the rig, so anything written there is gone
-before it can replicate.
+Pose or animate the **rig**, never the real character — the joint loop
+overwrites the real character's motors every frame from the rig, so anything
+written there is gone before it can replicate.
 
 ```lua
 local LR  = _G.LimbReanimate
-local rig = LR.Reanimate.Character   -- the Model to pose
+local rig = LR.Reanimate.Character   -- the Model to drive
 
--- Built-in R6 rig: turn the animation driver off first, or it fights you.
+-- Hand the rig over: stops the built-in driver fighting you for the Animator.
 LR.Reanimate.AnimateRig = false
-rig.Torso["Right Shoulder"].Transform = CFrame.Angles(0, 0, math.rad(-90))
 
--- Origin Only: nothing to turn off, and the joint names are your real ones.
--- R15 example:
+-- Play your own animation on it, exactly like a real character.
+local track = LR.Reanimate.Animator:LoadAnimation(someAnimation)
+track:Play()
+
+-- Or pose joints directly. Origin Only uses your real joint names:
 rig.UpperTorso.RightShoulder.Transform = CFrame.Angles(0, 0, math.rad(-90))
+-- Built-in R6 rig is always R6 names:
+rig.Torso["Right Shoulder"].Transform = CFrame.Angles(0, 0, math.rad(-90))
 ```
 
 Also exposed: `LR.Reanimate.IsOrigin`, `.Animator`, `.Tracks`

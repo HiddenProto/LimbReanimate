@@ -74,9 +74,18 @@ R15 (`Type 2`, with C0/C1 attachment offsets applied).
 conversion problem: the rig is structurally the same thing being puppeted, so
 the mapping is **identity** — joint X drives joint X, matched by part name — and
 the map is built from the real character's own joints as they are discovered
-rather than from a table. R6 and R15 stop being different cases. The clone is
-stripped of every script, Animator and Tool, keeping a Humanoid so it can still
-walk; nothing poses its limbs unless you do.
+rather than from a table. R6 and R15 stop being different cases.
+
+The clone is stripped of scripts and tools but **keeps its Animator**, and keeps
+a Humanoid so it can still walk. The point of the mode is that the rig passes
+for a real character: real part names, real joint names, real proportions, a
+real Animator to load onto. An external animation script written against a
+reanimated character can point at it and work unchanged. Because the rig matches
+your real rig type, the harvested animation ids are used as-is whatever that
+type is, instead of being restricted to R6.
+
+The animation authority rule is unchanged and still directional — the *real*
+character never gets an Animator; the rig always does.
 
 The root joint behaves the same in both: `Part0` is substituted for the REAL
 root part, so it keeps absorbing the void offset.
