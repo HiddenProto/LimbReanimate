@@ -8,7 +8,7 @@
 	Repo: https://github.com/HiddenProto/LimbReanimate
 ]]
 
-local SCRIPT_VERSION = "1.6.0"
+local SCRIPT_VERSION = "1.7.0"
 
 --==============================================================================
 -- 0. SINGLE INSTANCE GUARD
@@ -676,13 +676,52 @@ function Reanimate.CreateCharacter(InitCFrame)
 	end
 	Reanimate.RigParts = parts
 
+	-- Direct children only: the body parts the collision pass drives. Matches
+	-- the reference, and keeps accessory handles out of it.
+	local bodyParts = {}
+	for _, d in RC:GetChildren() do
+		if d:IsA("BasePart") then
+			table.insert(bodyParts, d)
+		end
+	end
+	Reanimate.RigBodyParts = bodyParts
+
 	-- Both modes get a working Animator. Whether the built-in driver actually
 	-- plays anything on it is the AnimateRig toggle.
 	Reanimate.AnimConn = SetupRigAnimation(RC, RCHum, RCRoot)
 
-	-- Drive the fake rig from real player input.
+	--[[
+		The rig MUST collide with the world.
+
+		Every rig part starts CanCollide = false -- the built-in rig is built
+		that way, and an origin clone inherits it because the real character's
+		parts were already forced non-colliding before the clone was taken. A
+		Humanoid with no collision anywhere has nothing to stand on: it falls
+		forever, your real limbs follow it down, and you vanish on both the
+		client and the server.
+
+		Only the ROOT collides during normal movement states, so the rig stands
+		and walks without limbs snagging on geometry. In the odd states
+		(ragdoll, physics, seated, ...) everything collides.
+	]]
+	local NOCLIP_STATES = { "Running", "Jumping", "Freefall", "Landed", "Climbing", "Swimming" }
+
+	local groundParams = RaycastParams.new()
+	groundParams.RespectCanCollide = true
+	groundParams.FilterType = Enum.RaycastFilterType.Exclude
+	groundParams.FilterDescendantsInstances = { RC }
+	local lastSafest = cf
+
 	RigDriveConn = RunService.PreSimulation:Connect(function()
 		if not RC.Parent then return end
+
+		local clip = not table.find(NOCLIP_STATES, RCHum:GetState().Name)
+		for _, v in Reanimate.RigBodyParts do
+			if v.Parent then
+				v.CanCollide = clip or (v == RCRoot)
+			end
+		end
+
 		local mv = Vector3.zero
 		if Controls then
 			local ok, v = pcall(function() return Controls:GetMoveVector() end)
@@ -691,10 +730,18 @@ function Reanimate.CreateCharacter(InitCFrame)
 		if mv.Magnitude > 1 then mv = mv.Unit end
 		RCHum:Move(mv, true)
 		RCHum.Jump = os.clock() < JumpUntil
-		-- The rig is client-only; if it falls past the destroy plane, catch it.
+
+		-- Remember the last spot that actually had ground under it, and fall
+		-- back to THAT rather than to the camera focus, which follows the rig
+		-- and so would just chase it down.
+		local reach = 8 + RCHum.HipHeight + 3 * Reanimate.CharacterScale
+		if Workspace:Raycast(RCRoot.Position, Vector3.new(0, -reach, 0), groundParams) then
+			lastSafest = RCRoot.CFrame
+		end
 		if RCRoot.Position.Y < FallenPartsDestroyHeight + 3 * Reanimate.CharacterScale then
-			RCRoot.CFrame = CFrame.new(Camera.Focus.Position)
-			RCRoot.AssemblyLinearVelocity = Vector3.zero
+			RCRoot.CFrame = lastSafest
+			RCRoot.AssemblyLinearVelocity = Vector3.new(0, 50, 0)
+			RCRoot.AssemblyAngularVelocity = Vector3.zero
 		end
 	end)
 
@@ -1698,6 +1745,8 @@ local function dropdown(parent, text, options, defaultIndex, cb)
 		holder.Size = UDim2.new(1, 0, 0, h)
 	end
 
+	local disabled = {}
+
 	for i, opt in options do
 		local ob = baseButton(body, 21)
 		ob.LayoutOrder = i
@@ -1705,9 +1754,12 @@ local function dropdown(parent, text, options, defaultIndex, cb)
 		ob.TextSize = 12
 		ob.TextXAlignment = Enum.TextXAlignment.Left
 		ob.BackgroundColor3 = COL.BG
-		ob.MouseEnter:Connect(function() ob.BackgroundColor3 = COL.ITEM end)
+		ob.MouseEnter:Connect(function()
+			if not disabled[i] then ob.BackgroundColor3 = COL.ITEM end
+		end)
 		ob.MouseLeave:Connect(function() ob.BackgroundColor3 = COL.BG end)
 		ob.Activated:Connect(function()
+			if disabled[i] then return end
 			index = i
 			open = false
 			body.Visible = false
@@ -1719,6 +1771,21 @@ local function dropdown(parent, text, options, defaultIndex, cb)
 		optButtons[i] = ob
 	end
 
+	-- Greys an option out and makes it unselectable.
+	local function setDisabled(i, off, suffix)
+		disabled[i] = off or nil
+		local ob = optButtons[i]
+		if ob then
+			ob.Text = "  " .. options[i] .. (off and (suffix or " (unavailable)") or "")
+			ob.TextTransparency = off and 0.45 or 0
+		end
+	end
+
+	local function setIndex(i)
+		index = i
+		paint()
+	end
+
 	head.Activated:Connect(function()
 		open = not open
 		body.Visible = open
@@ -1728,7 +1795,7 @@ local function dropdown(parent, text, options, defaultIndex, cb)
 	paint()
 	resize()
 
-	return holder, function() return index end
+	return holder, function() return index end, setDisabled, setIndex
 end
 
 -- A collapsible section. Unlike dropdown() this does not know how many rows it
@@ -1996,10 +2063,12 @@ label(body,
 	"Only works in SOME games. Games that recreate the Animator automatically will fight the joint writes and win.",
 	11, COL.DIM, Enum.TextXAlignment.Center)
 
-dropdown(body, "Rig Source", {
+local _, _, rigSrcSetDisabled, rigSrcSetIndex = dropdown(body, "Rig Source", {
 	"Built-in R6",
 	"Origin Only (clone)",
 }, Reanimate.RigSource + 1, function(i) Reanimate.RigSource = i - 1 end)
+local rigSrcWarn = label(body, "", 11, COL.OFF, Enum.TextXAlignment.Center)
+rigSrcWarn.Visible = false
 label(body,
 	"Origin Only uses a clone of your real character as the rig: identity mapping, R6 or R15, your real part names and a working Animator, so external animation scripts can drive it like a real character.",
 	11, COL.DIM, Enum.TextXAlignment.Center)
@@ -2129,8 +2198,40 @@ end
 -- 10. LIFECYCLE
 --==============================================================================
 
+--[[
+	There is no built-in R15 rig. On an R15 character the built-in R6 rig can
+	only reach 6 of your ~14 joints -- everything below an elbow or knee has no
+	R6 counterpart and stays pinned at rest -- so it is greyed out and Origin
+	Only, whose mapping is identity, is selected instead.
+
+	Only the dropdown entry is blocked. The internal fallback that catches a
+	failed clone still reaches the built-in rig, because having no rig at all
+	would be worse.
+]]
+local r15Gated = false
+local function GateRigSourceForR15()
+	local char = Player.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	if not hum then return end
+	local isR15 = hum.RigType == Enum.HumanoidRigType.R15
+	if isR15 == r15Gated then return end
+	r15Gated = isR15
+
+	rigSrcSetDisabled(1, isR15, " -- no R15 variant")
+	rigSrcWarn.Visible = isR15
+	if isR15 then
+		rigSrcWarn.Text = "Your rig is R15. There is no built-in R15 rig, so Origin Only is being used."
+		if Reanimate.RigSource == 0 then
+			Reanimate.RigSource = 1
+			rigSrcSetIndex(2)
+		end
+	end
+end
+
 local statusConn = RunService.Heartbeat:Connect(function()
 	if not statusLabel.Parent then return end
+
+	pcall(GateRigSourceForR15)
 
 	-- The joint set is only known once a reanimate has discovered it, and it
 	-- changes with rig source and rig type, so the panel follows it.

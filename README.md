@@ -29,10 +29,10 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/HiddenProto/LimbReani
 change under you. A new one is published with every update:
 
 ```lua
-loadstring(game:HttpGet("https://raw.githubusercontent.com/HiddenProto/LimbReanimate/v1.6.0/src/LimbReanimate.lua"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/HiddenProto/LimbReanimate/v1.7.0/src/LimbReanimate.lua"))()
 ```
 
-Current release: **v1.6.0**
+Current release: **v1.7.0**
 
 ---
 
@@ -48,7 +48,7 @@ Same options as Uhhhhhh's Limbs page.
 | **RootPart Mode** | Where the real root part gets parked. 5 options — see below. |
 | **RootPart Velocity** | What velocity the parked root is given each frame. |
 | **Init Mode** | How the character enters the reanimated state — including **No Respawn**, which never kills you. |
-| **Rig Source** | `Built-in R6` (default) or `Origin Only` — see below. |
+| **Rig Source** | `Built-in R6` or `Origin Only` — see below. On an R15 character the built-in option is greyed out and Origin Only is selected for you. |
 | **Animate Fake Rig** | Plays your own character animations on the rig, which your real limbs then copy. On for Built-in R6; **forced off when Origin Only starts**, since that mode exists to hand the rig to your own script. The Animator is there either way. |
 | Show me how I look! | Throttles joint writes to 10/s, so you see roughly what other players receive. |
 | Target Fling Enabled | Lets `Fling()` queue targets. Touching a player takes network ownership of them. |
@@ -124,6 +124,23 @@ joint happens to the matching real joint.
 
 If the clone fails for any reason it falls back to the built-in R6 rig and warns
 rather than leaving you with no rig.
+
+### R15
+
+**There is no built-in R15 rig.** On an R15 character the built-in R6 option is
+greyed out and Origin Only is selected automatically, because:
+
+- the built-in rig is R6, so the map can only reach **6 of your ~14 joints** —
+  everything past an elbow or knee has no R6 counterpart and stays pinned at
+  rest. It is an approximation, not a reanimate;
+- Origin Only clones your actual R15 body, so the mapping is identity and
+  **every** joint is driven, with your real R15 names and proportions.
+
+Only the dropdown entry is blocked. The internal fallback that catches a failed
+clone can still reach the built-in rig, since no rig at all would be worse.
+
+Everything else — RootPart Mode, Velocity, Init Mode, fling, Hide Limbs — is
+rig-agnostic and behaves identically on R15.
 
 ### Driving the rig yourself
 
